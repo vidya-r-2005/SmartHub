@@ -441,3 +441,27 @@ Working branch: **`backend-dev`**
 No commits or pushes have been made by the automated implementation. All
 changes are unstaged working-tree modifications. Run `git diff` to review
 before committing.
+
+## Dashboard frontend
+
+A responsive Flask-rendered dashboard is served at `/`. It includes a live overview of session totals, active sessions, item availability, service counts, recent events, system health, and the next-hour CHARGE forecast when configured. CHARGE supports session start/stop, STORE supports start/unlock/finish with confirmations, and BORROW lists available items and submits borrow/return requests. API failures and unconfigured ML services show an honest unavailable state.
+
+The current STORE API does not return locker assignments or locker inventory, so the UI does not invent a locker number. The BORROW start and return APIs accept RFID fields only; they do not accept an image. `POST /api/ml/verify-item` remains a separate endpoint (multipart `image` plus `expected_category`, or JSON with `image_base64`, `mime_type`, and `expected_category`) and is not wired into borrowing.
+
+Frontend files: `app/dashboard/templates/index.html`, `app/dashboard/static/style.css`, and `app/dashboard/static/script.js`. Dashboard integrations use `GET /api/dashboard/summary`, `/api/metrics/usage`, `/api/status`, `/api/events`, `/api/health`, `/api/ml/usage-prediction`; CHARGE uses `POST /api/charge/start` and `/api/charge/stop`; STORE uses `POST /api/store/start`, `/api/store/unlock`, and `/api/store/finish`; BORROW uses `GET /api/borrow/items`, `POST /api/borrow/start`, and `/api/borrow/return`.
+
+## Dashboard setup and use
+
+Python 3.11 or newer is required. Install and run with:
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pytest tests/ -v
+python app/main.py
+```
+
+Open <http://127.0.0.1:5000/>. `SMARTHUB_ENV` selects development (default), testing, or production configuration. Set a private `SECRET_KEY` for production; `SESSION_TIMEOUT_HOURS` controls stale-session recovery (default 8), `PORT` changes the development server port (default 5000), and production `SIMULATION_MODE` selects simulated hardware. Do not commit secret values.
+
+Hardware simulation supports local development. Physical RFID, coin, charging, and lock operations require compatible Raspberry Pi hardware and verified wiring. Forecast and image verification models are optional and report unavailable until configured. CHARGE records amounts and payment methods but does not process card payments. Tests use isolated temporary databases and require no hardware, money, or trained ML models. Run the complete suite with `python -m pytest tests/ -v`.
