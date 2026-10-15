@@ -1,0 +1,36 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+venv/
+.venv/
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment variables
+.env
+
+# IDE files
+.vscode/
+.idea/
+
+# Windows / macOS system files
+desktop.ini
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+
+# ML generated files
+*.pkl
+*.joblib
+
+# Temporary files
+*.tmp
+*.log

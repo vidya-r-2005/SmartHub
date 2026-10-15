@@ -1,0 +1,2 @@
+# SmartHub hardware package
+

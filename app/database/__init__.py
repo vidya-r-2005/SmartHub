@@ -1,0 +1,2 @@
+# SmartHub database package
+
