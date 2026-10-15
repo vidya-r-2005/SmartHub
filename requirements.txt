@@ -1,0 +1,21 @@
+# SmartHub Dependencies
+
+# Core Web & Data Processing
+flask>=3.0.0
+flask-cors>=4.0.0
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Feature 1: Chronos-2 Foundation Model Forecasting
+# Recommended installation inside dedicated Python 3.12 venv (.venv-chronos):
+# pip install torch --index-url https://download.pytorch.org/whl/cpu
+# pip install transformers accelerate chronos-forecasting
+
+# Feature 2: Peripheral Device Vision Verification & Classification
+# pip install torchvision --index-url https://download.pytorch.org/whl/cpu
+# pip install pillow scikit-learn matplotlib
+torchvision>=0.17.0
+pillow>=10.0.0
+scikit-learn>=1.3.0
+matplotlib>=3.8.0

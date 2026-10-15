@@ -1,0 +1,40 @@
+{
+  "dataset_name": "UrbanEV Preprocessed Hourly Benchmark",
+  "source": "UrbanEV 20220901-20230228_zone-cleaned-aggregated",
+  "primary_zone_id": "595",
+  "total_records": 4344,
+  "start_time": "2022-09-01T00:00:00",
+  "end_time": "2023-02-28T23:00:00",
+  "sampling_frequency": "1 hour",
+  "chronological_split": {
+    "train_ratio": 0.8,
+    "train_records": 3475,
+    "test_records": 869,
+    "split_timestamp": "2023-01-23T19:00:00"
+  },
+  "target_definitions": {
+    "primary_target": {
+      "name": "volume_kwh",
+      "description": "Total electric energy dispensed to vehicles during the 1-hour window.",
+      "units": "Kilowatt-hours (kWh)",
+      "interpretation": "Electrical energy demand / grid load. Does NOT measure session count.",
+      "limitations": "Influenced by charger power capacities (fast DC vs slow AC) and vehicle acceptance rates."
+    },
+    "secondary_metric": {
+      "name": "occupancy_piles",
+      "description": "Average number of concurrently occupied charging piles during the 1-hour window.",
+      "units": "Active occupied chargers (piles)",
+      "interpretation": "Infrastructure bay utilization. Does NOT measure session arrival counts.",
+      "limitations": "Saturates at maximum zone pile capacity; does not differentiate power levels."
+    },
+    "auxiliary_features": {
+      "duration_hours": "Cumulative vehicle plug-in duration (hours) across active piles.",
+      "e_price": "Electricity tariff during the hour (Yuan/kWh).",
+      "s_price": "Charging service fee during the hour (Yuan/kWh)."
+    }
+  },
+  "files_generated": [
+    "hub_595_hourly.csv",
+    "citywide_hourly.csv"
+  ]
+}

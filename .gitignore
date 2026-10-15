@@ -1,0 +1,35 @@
+# Python Virtual Environments
+.venv/
+.venv*/
+venv/
+env/
+ENV/
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Raw Large Datasets (> 100MB exceeds GitHub limits)
+data/UrbanEVDataset.zip
+data/UrbanEVDataset/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Distribution / Packaging
+dist/
+build/
+*.egg-info/
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment variables
+.env
+.env.local
