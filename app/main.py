@@ -121,7 +121,13 @@ def _register_routes(app: Flask) -> None:
     def status():
         try:
             summary = database.get_dashboard_summary(db_path=_db_path(app))
-            return jsonify({"status": "ok", "summary": summary}), 200
+            return jsonify({
+                "status": "ok",
+                "simulation_mode": bool(app.config["SIMULATION_MODE"]),
+                "charging_port_capacity": app.config["CHARGING_PORT_CAPACITY"],
+                "power_bank_bay_capacity": app.config["POWER_BANK_BAY_CAPACITY"],
+                "summary": summary,
+            }), 200
         except Exception as exc:
             logger.error("Status check failed: %s", exc)
             return jsonify({"status": "error", "error": "Database unavailable"}), 503
@@ -195,6 +201,7 @@ def _register_routes(app: Flask) -> None:
                 rfid_uid=rfid_uid,
                 amount=amount,
                 payment_method=payment_method,
+                port_capacity=app.config["CHARGING_PORT_CAPACITY"],
                 db_path=_db_path(app),
             )
             return jsonify(result), 201

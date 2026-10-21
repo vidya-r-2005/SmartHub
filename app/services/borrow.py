@@ -11,7 +11,8 @@ Safety guarantees
 -----------------
 - Vision mismatch always raises ``VerificationMismatchError``; never
   silently authorises the operation.
-- When vision is unavailable, the operation proceeds on RFID alone.
+- RFID-only flows are allowed, but a requested camera verification fails
+  closed when the model is unavailable or cannot classify the image.
 - A user may not borrow the same item twice simultaneously.
 - Session closure on return is done in the same DB connection block,
   ensuring consistency.
@@ -104,6 +105,10 @@ def start_borrow(
     vision_result: Optional[dict] = None
     if image_data:
         vision_result = _verify_vision(image_data, item["item_type"], mime_type, db_path)
+        if not vision_result.get("available"):
+            raise BorrowServiceError(
+                "Vision verification is unavailable; refusing camera-verified borrow"
+            )
         if vision_result.get("available") and vision_result.get("match") is False:
             # Mismatch confirmed — log and refuse
             db.log_system_event(
@@ -188,6 +193,10 @@ def return_item(
     vision_result: Optional[dict] = None
     if image_data:
         vision_result = _verify_vision(image_data, item["item_type"], mime_type, db_path)
+        if not vision_result.get("available"):
+            raise BorrowServiceError(
+                "Vision verification is unavailable; refusing camera-verified return"
+            )
         if vision_result.get("available") and vision_result.get("match") is False:
             db.log_system_event(
                 "RETURN_VISION_MISMATCH",
@@ -204,34 +213,11 @@ def return_item(
                 f"got {vision_result.get('category')!r}"
             )
 
-    # --- Record return atomically; then close the associated session ------------
+    # --- Return inventory and close the associated session atomically ------------
     try:
-        db.record_return(item["id"], db_path)
+        session_id = db.record_return_and_end_session(item["id"], db_path)
     except ValueError as exc:
         raise BorrowServiceError(str(exc)) from exc
-
-    # Find and close the associated BORROW session in a single connection
-    session_id: Optional[int] = None
-    connection = db.get_connection(db_path)
-    try:
-        borrow_row = connection.execute(
-            """
-            SELECT br.session_id
-            FROM borrow_records AS br
-            WHERE br.item_id = ? AND br.status = 'returned'
-            ORDER BY br.id DESC LIMIT 1
-            """,
-            (item["id"],),
-        ).fetchone()
-        if borrow_row:
-            session_id = borrow_row["session_id"]
-            db.end_session(session_id, "completed", db_path)
-    except Exception:
-        logger.exception(
-            "Failed to close borrow session for item %s", item["id"]
-        )
-    finally:
-        connection.close()
 
     db.log_system_event(
         "BORROW_RETURN",

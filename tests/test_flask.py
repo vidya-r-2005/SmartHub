@@ -27,6 +27,8 @@ def test_status_returns_summary(client):
     data = resp.get_json()
     assert data["status"] == "ok"
     assert "summary" in data
+    assert data["simulation_mode"] is True
+    assert data["charging_port_capacity"] == 16
 
 
 def test_events_endpoint_returns_list(client):

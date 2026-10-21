@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101f35">
+  <title>SmartHub — Campus utility kiosk</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='script.js') }}" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="topbar">
+    <a class="brand" href="#overview" aria-label="SmartHub overview"><span class="brand-mark">S</span><span>SmartHub<small>Campus utility kiosk</small></span></a>
+    <div class="topbar-right"><span id="connection" class="status-pill pending"><span></span> Checking system</span><button class="icon-button" id="refresh-button" type="button" aria-label="Refresh dashboard">↻</button></div>
+  </header>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <p class="nav-label">WORKSPACE</p>
+      <nav>
+        <a class="nav-link active" href="#overview" data-page="overview"><span>▦</span>Overview</a>
+        <a class="nav-link" href="#charge" data-page="charge"><span>ϟ</span>CHARGE</a>
+        <a class="nav-link" href="#store" data-page="store"><span>▣</span>STORE</a>
+        <a class="nav-link" href="#borrow" data-page="borrow"><span>↗</span>BORROW</a>
+      </nav>
+      <div class="sidebar-note"><span class="note-icon">i</span><p>Campus services in one place.<br><small>Use your registered RFID ID to begin.</small></p></div>
+      <footer>SmartHub <span>•</span> Secure personal utility kiosk</footer>
+    </aside>
+    <main id="main" tabindex="-1">
+      <section class="page active" id="page-overview" data-title="Overview">
+        <div class="page-heading"><div><p class="eyebrow">CAMPUS SERVICES</p><h1>Good day</h1><p class="muted">A live view of your SmartHub kiosk.</p></div><button class="button secondary" type="button" data-refresh>Refresh data</button></div>
+        <div id="page-alert" class="alert hidden" role="status"></div>
+        <div class="metric-grid" id="metrics" aria-live="polite">
+          <article class="metric-card"><p>Total sessions</p><strong data-metric="total_sessions">—</strong><small>All recorded sessions</small></article>
+          <article class="metric-card"><p>Active sessions</p><strong data-metric="active_sessions">—</strong><small>Currently in progress</small></article>
+          <article class="metric-card"><p>Available items</p><strong data-metric="available_items">—</strong><small>Ready to borrow</small></article>
+          <article class="metric-card"><p>Borrowed items</p><strong data-metric="borrowed_items">—</strong><small>Currently on loan</small></article>
+        </div>
+        <div class="overview-grid">
+          <article class="panel"><div class="panel-heading"><div><h2>Service activity</h2><p class="muted">Session totals reported by the kiosk</p></div><span class="subtle-tag">LIVE DATA</span></div><div id="service-counts" class="service-counts"><p class="empty-state">Loading service metrics…</p></div></article>
+          <article class="panel"><div class="panel-heading"><div><h2>System status</h2><p class="muted">Connection and service health</p></div></div><div id="system-status" class="status-content"><p class="empty-state">Checking connection…</p></div><div class="prediction-box"><div><span class="prediction-icon">✳</span><div><strong>Next hour forecast</strong><small id="prediction">Checking prediction service…</small></div></div></div></article>
+        </div>
+        <article class="panel activity-panel"><div class="panel-heading"><div><h2>Historical usage</h2><p class="muted">Recent completed or closed service sessions</p></div></div><div id="usage-history" class="event-list"><p class="empty-state">Loading usage history…</p></div></article>
+        <article class="panel activity-panel"><div class="panel-heading"><div><h2>Recent activity</h2><p class="muted">Latest events recorded by the system</p></div></div><div id="events" class="event-list"><p class="empty-state">Loading recent events…</p></div></article>
+      </section>
+      <section class="page" id="page-charge" data-title="CHARGE">
+        <div class="page-heading"><div><p class="eyebrow">DEVICE CHARGING</p><h1>CHARGE</h1><p class="muted">Start a charging session and keep track of its status.</p></div><span class="service-icon charge-icon">ϟ</span></div>
+        <div class="service-layout"><article class="panel form-panel"><h2>Start a session</h2><p class="muted">Enter your RFID ID and the payment amount to record.</p><form id="charge-start-form"><label for="charge-rfid">Your RFID ID</label><input id="charge-rfid" name="rfid_uid" autocomplete="off" required maxlength="64" placeholder="Scan or enter your RFID ID"><label for="charge-amount">Amount</label><div class="input-prefix"><span>₹</span><input id="charge-amount" name="amount" type="number" min="0" max="10000" step="0.01" value="0" required></div><label for="payment-method">Payment method</label><select id="payment-method" name="payment_method"><option value="coin">Coin</option><option value="free">Free session</option><option value="mock">Mock payment</option><option value="card">Card (record only)</option></select><p class="help-text">The kiosk records the selected method. No online payment is processed here.</p><button class="button primary" type="submit">Start charging</button></form></article><article class="panel session-panel"><div class="panel-heading"><div><h2>Session status</h2><p class="muted">Your current charging session</p></div><span class="live-indicator"><i></i> Ready</span></div><div id="charge-session" class="session-content"><div class="empty-illustration">ϟ</div><p class="empty-title">No session started</p><p class="muted">Your session details will appear here.</p></div></article></div>
+      </section>
+      <section class="page" id="page-store" data-title="STORE">
+        <div class="page-heading"><div><p class="eyebrow">TEMPORARY STORAGE</p><h1>STORE</h1><p class="muted">Use a secure storage session for your belongings.</p></div><span class="service-icon store-icon">▣</span></div>
+        <div class="service-layout"><article class="panel form-panel"><h2>Open a storage session</h2><p class="muted">Your RFID ID is used to associate the session with you.</p><form id="store-start-form"><label for="store-rfid">Your RFID ID</label><input id="store-rfid" name="rfid_uid" autocomplete="off" required maxlength="64" placeholder="Scan or enter your RFID ID"><button class="button primary" type="submit">Begin storage</button></form><div class="notice"><span>ⓘ</span><p>A locker assignment is not returned by the current service API. Follow the kiosk hardware prompts.</p></div></article><article class="panel session-panel"><div class="panel-heading"><div><h2>Session status</h2><p class="muted">Unlock only when you are at the locker</p></div></div><div id="store-session" class="session-content"><div class="empty-illustration">▣</div><p class="empty-title">No active session</p><p class="muted">Start a session to see available actions.</p></div></article></div>
+      </section>
+      <section class="page" id="page-borrow" data-title="BORROW">
+        <div class="page-heading"><div><p class="eyebrow">SHARED ACCESSORIES</p><h1>BORROW</h1><p class="muted">See what is available, then borrow or return an item.</p></div><span class="service-icon borrow-icon">↗</span></div>
+        <article class="panel inventory-panel"><div class="panel-heading"><div><h2>Available items</h2><p class="muted">Availability reported by the kiosk</p></div><button class="button secondary small" id="items-refresh" type="button">Refresh</button></div><div id="items-list" class="items-list"><p class="empty-state">Loading inventory…</p></div></article>
+        <div class="service-layout borrow-actions"><article class="panel form-panel"><h2>Borrow an item</h2><form id="borrow-form"><label for="borrow-rfid">Your RFID ID</label><input id="borrow-rfid" name="rfid_uid" required maxlength="64" autocomplete="off" placeholder="Scan or enter your RFID ID"><label for="borrow-item">Item RFID ID</label><input id="borrow-item" name="item_rfid" required maxlength="64" autocomplete="off" placeholder="Select or enter item RFID"><button class="button primary" type="submit">Borrow item</button></form></article><article class="panel form-panel"><h2>Return an item</h2><p class="muted">Return is confirmed by the backend after the item RFID is checked.</p><form id="return-form"><label for="return-item">Item RFID ID</label><input id="return-item" name="item_rfid" required maxlength="64" autocomplete="off" placeholder="Scan or enter item RFID"><button class="button secondary" type="submit">Return item</button></form><div class="notice"><span>ⓘ</span><p>Image verification is currently unavailable unless a model is configured. RFID service checks remain active.</p></div></article></div><div id="borrow-feedback" class="alert hidden" role="status"></div>
+      </section>
+      <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    </main>
+  </div>
+</body>
+</html>

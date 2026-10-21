@@ -33,6 +33,10 @@ class Config:
     SIMULATION_MODE: bool = True  # Always simulate unless overridden
     GPIO_AVAILABLE: bool = False
 
+    # Software assumptions; confirm these values against the kiosk hardware.
+    CHARGING_PORT_CAPACITY: int = int(os.environ.get("CHARGING_PORT_CAPACITY", "16"))
+    POWER_BANK_BAY_CAPACITY: int = int(os.environ.get("POWER_BANK_BAY_CAPACITY", "12"))
+
     # Logging
     LOG_LEVEL: str = "INFO"
 

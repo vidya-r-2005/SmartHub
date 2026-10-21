@@ -1,0 +1,42 @@
+{
+  "dataset": "hub_595_hourly.csv",
+  "target": "volume_kwh",
+  "units": "kWh",
+  "baselines": {
+    "lag_1_persistence": {
+      "mae": 860.19,
+      "rmse": 1201.24,
+      "wape_percent": 15.13,
+      "sample_count": 869
+    },
+    "seasonal_naive_24h": {
+      "mae": 747.32,
+      "rmse": 964.86,
+      "wape_percent": 13.14,
+      "sample_count": 869
+    },
+    "seasonal_naive_168h": {
+      "mae": 1574.18,
+      "rmse": 2326.01,
+      "wape_percent": 27.68,
+      "sample_count": 869
+    },
+    "rolling_3h_mean": {
+      "mae": 1298.62,
+      "rmse": 1767.9,
+      "wape_percent": 22.83,
+      "sample_count": 869
+    }
+  },
+  "chronos_2": {
+    "model_name": "autogluon/chronos-2-small",
+    "target": "volume_kwh",
+    "eval_steps": 869,
+    "metrics": {
+      "mae": 462.02,
+      "rmse": 622.5,
+      "wape_percent": 8.12,
+      "sample_count": 869
+    }
+  }
+}

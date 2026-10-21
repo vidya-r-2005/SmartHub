@@ -201,21 +201,22 @@ def test_start_borrow_vision_mismatch_does_not_borrow(tmp_db):
     assert any(i["rfid_uid"] == "VIS_I3" for i in items)
 
 
-def test_start_borrow_vision_unavailable_allows_borrow(tmp_db):
-    """When vision model is unavailable, borrow proceeds (RFID is enough)."""
+def test_start_borrow_requested_vision_unavailable_refuses_borrow(tmp_db):
+    """A requested camera check must fail closed when no model is available."""
     _make_user("VIS_U4", tmp_db)
     _make_item("VIS_I4", "power_bank", tmp_db)
 
     fake_vision = _vision_unavailable("power_bank")
     with patch("app.services.borrow._verify_vision", return_value=fake_vision):
-        result = start_borrow(
-            rfid_uid="VIS_U4",
-            item_rfid="VIS_I4",
-            image_data=b"x",
-            db_path=tmp_db,
-        )
+        with pytest.raises(BorrowServiceError, match="unavailable"):
+            start_borrow(
+                rfid_uid="VIS_U4",
+                item_rfid="VIS_I4",
+                image_data=b"x",
+                db_path=tmp_db,
+            )
     # Should succeed — unavailable model is not a mismatch
-    assert "borrow_record_id" in result
+    assert any(i["rfid_uid"] == "VIS_I4" for i in list_available_items(db_path=tmp_db))
 
 
 # ---------------------------------------------------------------------------

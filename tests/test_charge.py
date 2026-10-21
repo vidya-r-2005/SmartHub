@@ -63,6 +63,18 @@ def test_start_session_auto_registers_user(tmp_db):
     assert user["id"] == result["user_id"]
 
 
+def test_start_session_refuses_when_configured_port_capacity_is_full(tmp_db):
+    start_charging_session(
+        rfid_uid="PORT_USER_1", amount=0, port_capacity=1,
+        charging_controller=_sim_ctrl(), db_path=tmp_db,
+    )
+    with pytest.raises(ChargeServiceError, match="No charging port"):
+        start_charging_session(
+            rfid_uid="PORT_USER_2", amount=0, port_capacity=1,
+            charging_controller=_sim_ctrl(), db_path=tmp_db,
+        )
+
+
 def test_start_session_missing_rfid_raises(tmp_db):
     with pytest.raises(ChargeServiceError, match="RFID"):
         start_charging_session(

@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # Minimum payment required to start a charging session (currency units)
 MINIMUM_CHARGE_AMOUNT = 0.0  # Allow free/zero-payment sessions (campus kiosk)
 MAXIMUM_CHARGE_AMOUNT = 10_000.0  # Sanity cap
+DEFAULT_CHARGING_PORT_CAPACITY = 16
 
 # Payment methods accepted for charging
 _VALID_PAYMENT_METHODS = frozenset({"coin", "mock", "free", "card"})
@@ -42,6 +43,7 @@ def start_charging_session(
     payment_method: str = "coin",
     charging_controller: Optional[ChargingController] = None,
     coin_acceptor: Optional[CoinAcceptor] = None,
+    port_capacity: int = DEFAULT_CHARGING_PORT_CAPACITY,
     db_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Start a charging session for the user identified by *rfid_uid*.
@@ -68,6 +70,8 @@ def start_charging_session(
     # --- Validate inputs --------------------------------------------------------
     if not rfid_uid or not rfid_uid.strip():
         raise ChargeServiceError("RFID UID is required")
+    if not isinstance(port_capacity, int) or isinstance(port_capacity, bool) or port_capacity < 1:
+        raise ChargeServiceError("port_capacity must be a positive integer")
 
     if not isinstance(amount, (int, float)) or isinstance(amount, bool):
         raise ChargeServiceError("amount must be a number")
@@ -105,6 +109,12 @@ def start_charging_session(
         raise ChargeServiceError(
             f"User already has an active CHARGE session (id={existing[0]['id']}). "
             "Stop the existing session before starting a new one."
+        )
+
+    active_port_count = db.count_active_sessions_by_service("CHARGE", db_path)
+    if active_port_count >= port_capacity:
+        raise ChargeServiceError(
+            f"No charging port is available ({active_port_count}/{port_capacity} active)"
         )
 
     # --- Create session ---------------------------------------------------------

@@ -282,6 +282,22 @@ def get_active_sessions_for_user(
     return execute_query(query, (user_id, service_name.upper()), db_path)
 
 
+def count_active_sessions_by_service(
+    service_name: str, db_path: Optional[Path] = None
+) -> int:
+    """Return the number of active sessions for a service."""
+    rows = execute_query(
+        """
+        SELECT COUNT(*) AS session_count
+        FROM sessions AS s JOIN services AS sv ON s.service_id = sv.id
+        WHERE sv.name = ? AND s.status = 'active'
+        """,
+        (service_name.strip().upper(),),
+        db_path,
+    )
+    return int(rows[0]["session_count"])
+
+
 def end_session(
     session_id: int,
     status: str = "completed",
@@ -623,6 +639,56 @@ def record_return(item_id: int, db_path: Optional[Path] = None) -> bool:
         connection.commit()
         logger.debug("Return recorded for item id=%s", item_id)
         return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def record_return_and_end_session(
+    item_id: int, db_path: Optional[Path] = None
+) -> int:
+    """Atomically return an item and complete the linked BORROW session.
+
+    The older :func:`record_return` remains available for compatibility.
+    This helper is used by the service workflow, where inventory and session
+    state must never be committed independently.
+    """
+    connection = get_connection(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        borrow = connection.execute(
+            """
+            SELECT id, session_id FROM borrow_records
+            WHERE item_id = ? AND status = 'borrowed'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (item_id,),
+        ).fetchone()
+        if borrow is None or borrow["session_id"] is None:
+            raise ValueError(f"No active borrow record for item id={item_id}")
+
+        changed = connection.execute(
+            """
+            UPDATE sessions
+            SET ended_at = CURRENT_TIMESTAMP,
+                duration_seconds = CAST((julianday(CURRENT_TIMESTAMP) - julianday(started_at)) * 86400 AS INTEGER),
+                status = 'completed'
+            WHERE id = ? AND status = 'active'
+            """,
+            (borrow["session_id"],),
+        ).rowcount
+        if changed != 1:
+            raise ValueError(f"Borrow session id={borrow['session_id']} is not active")
+
+        connection.execute(
+            "UPDATE borrow_records SET returned_at = CURRENT_TIMESTAMP, status = 'returned' WHERE id = ?",
+            (borrow["id"],),
+        )
+        connection.execute("UPDATE items SET status = 'available' WHERE id = ?", (item_id,))
+        connection.commit()
+        return int(borrow["session_id"])
     except Exception:
         connection.rollback()
         raise

@@ -1,0 +1,58 @@
+{
+  "status": "success",
+  "model_architecture": "mobilenet_v2",
+  "classes": [
+    "charger",
+    "charging_cable",
+    "power_bank"
+  ],
+  "human_labels": {
+    "charger": "Charger Adapter",
+    "charging_cable": "Charging Cable",
+    "power_bank": "Power Bank"
+  },
+  "training_epochs": 12,
+  "best_epoch": 5,
+  "train_samples": 309,
+  "valid_samples": 85,
+  "test_samples": 30,
+  "test_accuracy": 1.0,
+  "test_macro_f1": 1.0,
+  "classification_report": {
+    "Charger Adapter": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 21.0
+    },
+    "Charging Cable": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 5.0
+    },
+    "Power Bank": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 4.0
+    },
+    "accuracy": 1.0,
+    "macro avg": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 30.0
+    },
+    "weighted avg": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 30.0
+    }
+  },
+  "best_valid_f1": 1.0,
+  "total_training_time_seconds": 21736.2,
+  "generated_at": "2026-10-15T14:22:52.580285+00:00",
+  "checkpoint_path": "app\\ml\\device_model.pth"
+}

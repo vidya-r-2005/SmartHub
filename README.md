@@ -1,82 +1,119 @@
 # SmartHub — Secure Personal Utility Kiosk
 
-A self-service utility kiosk providing three services:
-**CHARGE** (paid device charging), **STORE** (secure temporary storage), and **BORROW** (power-bank / accessory lending).
+SmartHub is a small-scale, Raspberry Pi-based college project designed to manage a shared campus charging and peripheral lending kiosk.
+
+The application integrates three primary self-service utilities:
+- **CHARGE**: Paid and timed personal device charging sessions (managing port availability and coin/payment records).
+- **STORE**: Secure temporary locker storage (RFID-associated session lifecycle with lock/unlock controls).
+- **BORROW**: Lending and return of shared accessories (power banks, charging cables, and charger adapters) tracked by RFID and verified by camera vision.
 
 ---
 
-## 1. Backend Architecture
+## 1. Verified Implementation Status
+
+As of October 2026, the complete repository audit and multi-branch integration on `hardware-dashboard-integration` confirms:
+
+- **Full Backend & REST API**: Flask application with SQLite database persistence, WAL mode, foreign key enforcement, atomic database transactions, session lifecycle management, and simulation mode.
+- **Hardware Abstraction Layer**: Dual-mode controllers for RFID reader (MFRC522), coin acceptor (pulse interrupt), charging relay/MOSFETs, electromagnetic locker lock, character LCD display, buzzer, and physical buttons. Full simulation mode enables complete end-to-end execution on Windows, macOS, or Linux without physical hardware.
+- **ML Feature 1 (Usage Prediction & Resource Allocation)**: Chronos-2 foundation time-series forecaster and historical previous-hour baseline. Models kiosk charging session demand (target: `charge_sessions`) bounded by physical kiosk capacity (`CHARGING_PORT_CAPACITY` default 16, `POWER_BANK_BAY_CAPACITY` default 12) rather than industrial EV metrics.
+- **ML Feature 2 (Camera-Based Device Verification)**: Deep convolutional neural network (MobileNetV2 transfer learning) trained on 424 Roboflow multi-class images (`charger`, `charging_cable`, `power_bank`). PyTorch checkpoint `app/ml/device_model.pth` (31 MB) is verified for CPU inference, integrated with fail-closed safety into the BORROW service.
+- **Service Dashboard**: Responsive campus kiosk UI (`index.html`, `script.js`, `style.css`) serving live session counts, system status, active session controls, inventory lists, and demand forecasts.
+- **Automated Test Suite**: 157 tests passing across database, charge, store, borrow, Flask API, dashboard, usage prediction, and vision classification (`157 passed in 8.87s`).
+
+---
+
+## 2. Architecture & Repository Structure
 
 ```
 SmartHub/
 ├── app/
-│   ├── main.py            # Flask application factory + all API routes
-│   ├── config.py          # Development / Testing / Production config classes
-│   ├── database/
-│   │   ├── db.py          # All database helpers (fully parameterized SQL)
-│   │   └── schema.sql     # SQLite schema + service seed data
-│   ├── hardware/
-│   │   ├── rfid.py        # RFID reader abstraction (sim + GPIO)
-│   │   ├── coin.py        # Coin acceptor (sim + GPIO pulse)
-│   │   ├── charging.py    # Charging relay / MOSFET control
-│   │   ├── lock.py        # Electromagnetic lock / solenoid
-│   │   ├── lcd.py         # I2C character LCD display
-│   │   ├── buzzer.py      # PWM buzzer
-│   │   └── buttons.py     # Push-button inputs
-│   ├── services/
-│   │   ├── charge.py      # CHARGE business logic
-│   │   ├── store.py       # STORE business logic
-│   │   └── borrow.py      # BORROW business logic + vision integration
-│   ├── dashboard/
-│   │   ├── static/        # CSS + JavaScript
-│   │   └── templates/     # Jinja2 HTML templates
-│   └── ml/
-│       ├── prediction.py  # Usage-prediction integration boundary
-│       └── vision.py      # Item-verification integration boundary
+│   ├── config.py              # Dev, Testing, and Production configuration classes
+│   ├── main.py                # Flask application factory and REST API endpoints
+│   ├── dashboard/             # Web dashboard
+│   │   ├── static/            # Frontend assets (script.js, style.css)
+│   │   └── templates/         # HTML templates (index.html)
+│   ├── database/              # Persistence layer
+│   │   ├── db.py              # SQLite helper layer (parameterized SQL, FK, WAL)
+│   │   └── schema.sql         # Database schema & initial service seed data
+│   ├── hardware/              # Dual-mode (Simulation / GPIO) hardware abstractions
+│   │   ├── buttons.py         # Push-button inputs
+│   │   ├── buzzer.py          # Buzzer controller
+│   │   ├── charging.py        # Charging relay / port controller
+│   │   ├── coin.py            # Coin acceptor pulse reader
+│   │   ├── lcd.py             # I2C character LCD interface
+│   │   ├── lock.py            # Electromagnetic solenoid lock driver
+│   │   └── rfid.py            # MFRC522 RFID reader driver
+│   ├── ml/                    # Machine learning models & pipelines
+│   │   ├── chronos_forecaster.py  # Chronos-2 time-series forecaster
+│   │   ├── device_classifier.py   # MobileNetV2 / ResNet18 PyTorch architecture
+│   │   ├── device_dataset.py      # Vision dataset loader & augmentations
+│   │   ├── device_model.pth       # Trained MobileNetV2 PyTorch weights
+│   │   ├── evaluate.py            # Baseline evaluation & error metrics
+│   │   ├── prediction.py          # Kiosk demand prediction & allocation advice
+│   │   ├── preprocess.py          # Chronological preprocessing pipeline
+│   │   ├── resource_allocation.py # Capacity-bounded advice generator
+│   │   ├── train_vision.py        # Vision classifier training script
+│   │   └── vision.py              # Unified camera verification & fail-closed wrapper
+│   └── services/              # Business logic services
+│       ├── borrow.py          # Accessory lending & return with vision check
+│       ├── charge.py          # Timed charging lifecycle & port capacity enforcement
+│       └── store.py           # Locker storage session lifecycle
 ├── data/
-│   └── smarthub.db        # Production SQLite database (gitignored)
+│   ├── dataset/
+│   │   └── charge_usage.csv   # Native SmartHub kiosk session dataset
+│   ├── devices/               # Roboflow peripheral device image dataset (424 images)
+│   │   ├── train/             # 309 training images with _classes.csv
+│   │   ├── valid/             # 85 validation images with _classes.csv
+│   │   └── test/              # 30 test images with _classes.csv
+│   ├── processed/             # Processed datasets, metrics, and training charts
+│   └── smarthub.db            # SQLite database file (generated/local)
 ├── tests/
-│   ├── conftest.py        # Shared pytest fixtures (isolated temp DB)
-│   ├── test_database.py   # 38 database layer tests
-│   ├── test_charge.py     # 15 CHARGE service tests
-│   ├── test_store.py      # 14 STORE service tests
-│   ├── test_borrow.py     # 20 BORROW service tests
-│   └── test_flask.py      # 37 Flask API route tests
-├── pytest.ini
-├── requirements.txt
-└── README.md
+│   ├── conftest.py            # Pytest fixtures (isolated temporary databases)
+│   ├── test_borrow.py         # 20 BORROW service tests
+│   ├── test_charge.py         # 16 CHARGE service tests
+│   ├── test_dashboard.py      # 3 Dashboard static & template tests
+│   ├── test_database.py       # 38 Database access layer tests
+│   ├── test_flask.py          # 35 REST API route tests
+│   ├── test_prediction.py     # 22 Forecaster, allocation & metric tests
+│   ├── test_store.py          # 14 STORE service tests
+│   └── test_vision.py         # 7 Deep learning vision & transform tests
+├── pytest.ini                 # Pytest configuration
+├── requirements.txt           # Unified Python dependencies
+└── README.md                  # Complete documentation
 ```
 
-The database layer is completely isolated for tests — every test fixture
-creates a fresh temporary SQLite file. The production database is never
-touched during test runs.
+---
+
+## 3. Scope Clarification: Kiosk vs Industrial EV
+
+> [!IMPORTANT]
+> Early exploratory documentation in the repository referenced megawatt-scale EV plazas, transformer loading, kilowatt-hour tariffs, and battery energy storage systems (BESS).
+> **SmartHub is not an industrial EV charging plaza.** It is an automated self-service college kiosk designed for smartphones, laptops, power banks, and personal electronics.
+> The UrbanEV dataset (`hub_595_hourly.csv`, `volume_kwh`) is retained strictly as an external high-volume benchmark for time-series foundation model transfer research. All operational kiosk prediction and resource allocation logic strictly targets `charge_sessions` and physical kiosk capacities (`CHARGING_PORT_CAPACITY = 16`, `POWER_BANK_BAY_CAPACITY = 12`).
 
 ---
 
-## 2. Python Version
+## 4. Setup & Installation
 
-**Python 3.14.3** (tested).  Python 3.11+ is required (uses `type | None`
-union syntax in type hints).
+### Requirements
+- **Python**: 3.11 or 3.12 (Python 3.12.5 verified)
+- **OS**: Windows, macOS, or Raspberry Pi OS (Linux)
 
----
+### Virtual Environment Setup
 
-## 3. Environment Setup
-
-### Windows PowerShell
-
+**Windows PowerShell:**
 ```powershell
-# Create a virtual environment
+# Create virtual environment
 python -m venv venv
 
 # Activate
-.\venv\Scripts\Activate.ps1
+.env\Scripts\Activate.ps1
 
-# Install dependencies
+# Install project dependencies
 pip install -r requirements.txt
 ```
 
-### Raspberry Pi OS (bash)
-
+**Raspberry Pi / Linux:**
 ```bash
 python3 -m venv venv
 source venv/bin/activate
@@ -85,359 +122,136 @@ pip install -r requirements.txt
 
 ---
 
-## 4. Dependencies
+## 5. Running the Application
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| `flask` | 3.1.1   | HTTP server and routing |
-| `pytest`| 9.1.1   | Automated testing |
-
-Raspberry Pi hardware libraries (`RPi.GPIO`, `mfrc522`, `RPLCD`) are
-**not** in `requirements.txt` — they are imported lazily inside physical
-driver paths only and are not needed to run the application in simulation
-mode or to execute tests.
-
----
-
-## 5. Configuration and Mock Mode
-
-Configuration is selected via the `SMARTHUB_ENV` environment variable:
-
-| Value | Class | Use |
-|-------|-------|-----|
-| `development` (default) | `DevelopmentConfig` | Local dev, simulation mode ON |
-| `testing` | `TestingConfig` | Automated tests, temp DB |
-| `production` | `ProductionConfig` | Raspberry Pi deployment |
-
-**Simulation mode** (`SIMULATION_MODE = True`) is the default for
-development and testing.  In this mode all hardware calls (RFID, coin
-acceptor, charging relay, lock, LCD, buzzer) are replaced by in-process
-software stubs — no GPIO or physical device is required.
-
-To run in physical mode on a Raspberry Pi, set:
-
-```bash
-export SMARTHUB_ENV=production
-export SIMULATION_MODE=   # empty = False → physical mode
-```
-
----
-
-## 6. Database Initialisation
+### Development / Simulation Mode (Default)
+In simulation mode, hardware drivers simulate RFID card reads, coin pulses, LCD rendering, and lock controls in software. No physical hardware is required.
 
 ```powershell
-# Windows
-python -c "from app.database.db import initialize_database; initialize_database()"
-```
-
-```bash
-# Raspberry Pi
-python3 -c "from app.database.db import initialize_database; initialize_database()"
-```
-
-This reads `app/database/schema.sql`, creates `data/smarthub.db` if it
-does not exist, and inserts the three services (`CHARGE`, `STORE`,
-`BORROW`) using `INSERT OR IGNORE`.  Safe to re-run on an existing
-database.
-
----
-
-## 7. Running the Application
-
-```powershell
-# Windows — development server
 python app/main.py
-
-# Or via Flask CLI
+```
+Or with Flask CLI:
+```powershell
 $env:FLASK_APP = "app.main"
 flask run --host=0.0.0.0 --port=5000
 ```
+Open `http://localhost:5000` in your web browser to access the SmartHub dashboard.
 
+### Physical Raspberry Pi Deployment
+On a configured Raspberry Pi with physical sensors connected:
 ```bash
-# Raspberry Pi
+export SMARTHUB_ENV=production
+export SIMULATION_MODE=false
 python3 app/main.py
 ```
 
-The server listens on `http://0.0.0.0:5000` by default.
-Set the `PORT` environment variable to override.
-
 ---
 
-## 8. Running Tests
+## 6. Running Tests
+
+The test suite runs against temporary, isolated SQLite databases. The production database is never modified during tests.
 
 ```powershell
-# Full suite
-python -m pytest tests/ -v
+# Run the complete test suite
+python -m pytest
 
-# Collect only (no execution)
-python -m pytest tests/ --collect-only -q
+# Run with verbose output
+python -m pytest -v
 
-# Single module
-python -m pytest tests/test_database.py -v
+# Run individual test modules
+python -m pytest tests/test_database.py
+python -m pytest tests/test_vision.py
+python -m pytest tests/test_prediction.py
+python -m pytest tests/test_dashboard.py
 ```
 
-All tests use isolated temporary databases.  The production database
-`data/smarthub.db` is **never** accessed during test runs.
-
-**Test results (Python 3.14.3):**
+**Verified Test Result:**
 ```
-124 passed in ~6s
-```
-
----
-
-## 9. API Endpoints
-
-All endpoints accept and return `application/json`.
-
-### System
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/health` | Liveness check |
-| `GET` | `/api/status` | Database summary |
-| `GET` | `/api/events?limit=N` | Recent system events |
-
-**`GET /api/health`** → `200 {"status": "ok", "service": "SmartHub"}`
-
----
-
-### Users
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/users` | Register user by RFID |
-| `GET`  | `/api/users/<id>` | Fetch user by ID |
-| `GET`  | `/api/users/rfid/<uid>` | Fetch user by RFID |
-
-**`POST /api/users`**
-```json
-Request:  { "rfid_uid": "AABBCCDD" }
-Response 201: { "user_id": 1, "rfid_uid": "AABBCCDD" }
-Response 409: { "error": "RFID UID already registered" }
+157 passed in 8.87s
 ```
 
 ---
 
-### Charging
+## 7. Machine Learning Features
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/charge/start` | Start charging session |
-| `POST` | `/api/charge/stop`  | Stop / cancel session |
-| `GET`  | `/api/charge/sessions` | List CHARGE sessions |
-| `GET`  | `/api/charge/sessions/<id>` | Single session |
+### Feature 1: Usage Forecasting & Smart Resource Allocation
+- **Architecture**: Supports zero-shot time-series forecasting via Chronos-2 (`autogluon/chronos-2-small`) and an in-process chronological baseline (`previous-hour baseline`).
+- **Target Variable**: Expected kiosk charging sessions (`charge_sessions`), bounded to non-negative counts.
+- **Resource Recommendations**:
+  - `HIGH` demand (≥85% port utilization): Alert busy window, recommend staging power banks as walk-away alternatives.
+  - `MODERATE` demand (50%–84% port utilization): Standard rotation in charging bays.
+  - `LOW` demand (<50% utilization): Initiate recharge cycles on depleted returned power banks inside kiosk bays.
+- **Kiosk Capacities**: Configurable via `CHARGING_PORT_CAPACITY` (default 16 ports) and `POWER_BANK_BAY_CAPACITY` (default 12 bays).
 
-**`POST /api/charge/start`**
-```json
-Request:  { "rfid_uid": "AABBCCDD", "amount": 10.0, "payment_method": "coin" }
-Response 201: { "session_id": 1, "transaction_id": 1, "user_id": 1, "status": "active" }
-```
-
-**`POST /api/charge/stop`**
-```json
-Request:  { "session_id": 1, "status": "completed" }
-Response 200: { "session_id": 1, "status": "completed", "duration_seconds": 42 }
-```
-
----
-
-### Storage
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/store/start`  | Start storage session |
-| `POST` | `/api/store/unlock` | Disengage lock |
-| `POST` | `/api/store/finish` | Re-lock + end session |
-| `GET`  | `/api/store/sessions` | List STORE sessions |
-
-**Workflow:** `start` → `unlock` → user places/retrieves item → `finish`
-
-```json
-POST /api/store/start
-Request:  { "rfid_uid": "AABBCCDD" }
-Response 201: { "session_id": 2, "user_id": 1, "status": "active" }
-
-POST /api/store/unlock
-Request:  { "session_id": 2 }
-Response 200: { "session_id": 2, "locked": false }
-
-POST /api/store/finish
-Request:  { "session_id": 2 }
-Response 200: { "session_id": 2, "status": "completed", "duration_seconds": 15 }
-```
+### Feature 2: Peripheral Device Vision Classifier
+- **Model Architecture**: MobileNetV2 with custom linear classification head (`Linear(1280, 256) -> BatchNorm1d -> ReLU -> Dropout -> Linear(256, 3)`).
+- **Classes**:
+  1. `charger` (Charger Adapter)
+  2. `charging_cable` (Charging Cable)
+  3. `power_bank` (Power Bank)
+- **Dataset**: 424 images sourced from Roboflow:
+  - Training split: 309 images
+  - Validation split: 85 images
+  - Test split: 30 images (21 Charger Adapters, 5 Charging Cables, 4 Power Banks)
+- **Checkpoint**: `app/ml/device_model.pth` (31.0 MB) verified for CPU inference.
+- **Performance Evaluation**: Evaluated test accuracy on the 30-image test set is 100% (1.0 Macro F1).
+  > [!NOTE]
+  > A 100% score on a small 30-image test set is a known limitation of small college datasets and does not indicate production perfection under varying campus lighting and background conditions.
+- **Fail-Closed Security**: When camera verification is requested during borrow/return, an unavailable vision model or confidence below threshold (`0.60`) refuses the operation to prevent unauthorized item swaps.
 
 ---
 
-### Borrowing
+## 8. Hardware Abstraction & Pin Mapping
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/borrow/items` | Available items |
-| `POST` | `/api/borrow/start` | Borrow an item |
-| `POST` | `/api/borrow/return` | Return an item |
-| `GET`  | `/api/borrow/records` | Borrow history |
+Hardware abstractions in `app/hardware/` automatically detect whether physical GPIO is available. In simulation mode, operations return successful mock state and log diagnostic events.
 
-```json
-POST /api/borrow/start
-Request:  { "rfid_uid": "AABBCCDD", "item_rfid": "ITEM001" }
-Response 201: { "session_id": 3, "borrow_record_id": 1, "user_id": 1,
-                "item_id": 1, "item_type": "power_bank", "vision_result": null }
-
-POST /api/borrow/return
-Request:  { "item_rfid": "ITEM001" }
-Response 200: { "item_id": 1, "item_type": "power_bank",
-                "status": "returned", "vision_result": null }
-```
+When deployed on a Raspberry Pi:
+| Component | Interface / Pins | Physical Driver |
+|-----------|------------------|-----------------|
+| RFID Reader | SPI (MISO, MOSI, SCK, CS: GPIO 8, RST: GPIO 25) | `mfrc522` / `SimpleMFRC522` |
+| LCD Display | I2C (SDA: GPIO 2, SCL: GPIO 3, Addr: `0x27`) | `smbus2` / `RPLCD` |
+| Coin Acceptor | GPIO 17 (Interrupt pulse counter) | `RPi.GPIO` |
+| Locker Solenoid | GPIO 22 (Active-High Relay / MOSFET) | `RPi.GPIO` |
+| Charging Relay | GPIO 27 (Active-High Relay) | `RPi.GPIO` |
+| Buzzer | GPIO 18 (PWM frequency output) | `RPi.GPIO` |
+| Push Buttons | GPIO 23, 24 (Internal pull-up) | `RPi.GPIO` |
 
 ---
 
-### Dashboard / Metrics
+## 9. API Reference
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/dashboard/summary` | Aggregate counts |
-| `GET` | `/api/metrics/usage?limit=N` | Recent completed sessions |
+All API routes communicate using `application/json` with consistent HTTP status codes.
 
-**`GET /api/dashboard/summary`**
-```json
-{
-  "total_sessions": 42,
-  "active_sessions": 3,
-  "total_users": 15,
-  "total_revenue": 210.50,
-  "available_items": 5,
-  "borrowed_items": 2,
-  "service_counts": {"CHARGE": 20, "STORE": 12, "BORROW": 10}
-}
-```
-
----
-
-### ML Integration
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/ml/usage-prediction` | Next-hour demand forecast |
-| `POST` | `/api/ml/verify-item` | Vision item verification |
-
-`GET /api/ml/usage-prediction` returns `503` when the model is not yet
-configured:
-```json
-{ "available": false, "predicted_demand": null, "error": "Prediction model not yet configured" }
-```
-
-`POST /api/ml/verify-item` accepts either:
-- **JSON body**: `{ "expected_category": "power_bank", "image_base64": "<base64>", "mime_type": "image/jpeg" }`
-- **Multipart form**: `image` file + `expected_category` field
-
-Returns `503` when the vision model is not configured.
+| Service | Method | Route | Description |
+|---------|--------|-------|-------------|
+| System | `GET` | `/api/health` | Liveness and service check |
+| System | `GET` | `/api/status` | Database totals and simulation mode status |
+| System | `GET` | `/api/events` | Recent audit events log |
+| Users | `POST` | `/api/users` | Register user by RFID UID |
+| Users | `GET` | `/api/users/<id>` | Lookup user by ID |
+| Users | `GET` | `/api/users/rfid/<uid>` | Lookup user by RFID UID |
+| Charge | `POST` | `/api/charge/start` | Start session and record payment transaction |
+| Charge | `POST` | `/api/charge/stop` | End charging session and calculate duration |
+| Charge | `GET` | `/api/charge/sessions` | List charging sessions |
+| Store | `POST` | `/api/store/start` | Start locker storage session |
+| Store | `POST` | `/api/store/unlock` | Disengage electronic locker lock |
+| Store | `POST` | `/api/store/finish` | Re-engage electronic lock and complete session |
+| Borrow | `GET` | `/api/borrow/items` | List available shared inventory |
+| Borrow | `POST` | `/api/borrow/start` | Borrow item with optional camera image check |
+| Borrow | `POST` | `/api/borrow/return` | Return item with atomic inventory update |
+| Dashboard | `GET` | `/api/dashboard/summary` | Live metric cards for kiosk dashboard |
+| Dashboard | `GET` | `/` | Web dashboard single-page interface |
+| ML | `GET` | `/api/ml/usage-prediction` | Next-hour demand forecast and resource plan |
+| ML | `POST` | `/api/ml/verify-item` | Multipart/form image verification |
 
 ---
 
-## 10. Database Tables
+## 10. Git Branch & Merge Guidance
 
-| Table | Purpose |
-|-------|---------|
-| `users` | RFID-identified users |
-| `services` | CHARGE, STORE, BORROW service registry |
-| `sessions` | Every service session with timestamps and status |
-| `transactions` | Payment records linked to sessions |
-| `items` | Borrowable items with RFID UIDs |
-| `borrow_records` | Borrow / return history |
-| `system_events` | Audit log for all service events |
-
-Foreign keys are enforced via `PRAGMA foreign_keys = ON` on every connection.
-
----
-
-## 11. Hardware Integration Status
-
-All hardware drivers have been implemented with a **simulation / physical**
-dual-mode design. The following table shows the current readiness:
-
-| Hardware | Simulation | Physical driver |
-|----------|-----------|----------------|
-| RFID reader (MFRC522) | ✅ | ✅ (deferred import) |
-| Coin acceptor (pulse) | ✅ | ✅ (deferred GPIO import) |
-| Charging relay | ✅ | ✅ (deferred GPIO import) |
-| Lock solenoid | ✅ | ✅ (deferred GPIO import) |
-| I2C LCD (16×2) | ✅ | ✅ (deferred RPLCD import) |
-| PWM Buzzer | ✅ | ✅ (deferred GPIO import) |
-| Push-buttons | ✅ | ✅ (deferred GPIO import) |
-| Camera (vision) | ✅ (mock) | ⚠️ Model not yet trained |
-
-> **Note:** Physical drivers have not been tested on actual Raspberry Pi
-> hardware.  Only simulation mode has been exercised.  Physical pin
-> numbers must be confirmed against your hardware wiring before deployment.
-
----
-
-## 12. ML Integration Interfaces
-
-### Usage Prediction (`app/ml/prediction.py`)
-
-- **Function**: `predict_next_hour_demand(historical_data, db_path) → dict`
-- **Input**: Historical CHARGE session records (list of dicts with `started_at`, `duration_seconds`)
-- **Output**: `{ "available": bool, "predicted_demand": float|None, "confidence": float|None, "model": str, "error": str|None }`
-- **Intended model**: Chronos-2 or similar time-series forecasting model
-- **Status**: Integration boundary defined. Model implementation (`app/ml/_prediction_model.py`) pending.
-
-### Item Verification (`app/ml/vision.py`)
-
-- **Function**: `verify_item(image_data: bytes, expected_category: str, mime_type: str) → dict`
-- **Input**: Raw image bytes (JPEG/PNG/WebP, ≤4 MB) + expected item category string
-- **Output**: `{ "available": bool, "match": bool|None, "category": str|None, "confidence": float|None, "expected": str, "error": str|None }`
-- **Intended model**: CNN-based object classifier
-- **Status**: Integration boundary defined. Model implementation (`app/ml/_vision_model.py`) pending.
-
-Both modules fail gracefully when their respective implementations are
-absent — they return `{"available": false, ...}` rather than raising.
-
----
-
-## 13. Known Limitations and Remaining Work
-
-| Area | Status | Notes |
-|------|--------|-------|
-| Database schema | ✅ Complete | No changes needed |
-| DB helper functions | ✅ Complete | All functions with isolation support |
-| CHARGE service | ✅ Complete | Simulation tested |
-| STORE service | ✅ Complete | Simulation tested |
-| BORROW service | ✅ Complete | Vision mock tested |
-| Flask API | ✅ Complete | All routes implemented |
-| Hardware sim | ✅ Complete | All drivers simulated |
-| Hardware physical | ⚠️ Untested | Requires Raspberry Pi + wiring |
-| ML prediction model | ⚠️ Pending | Stub boundary only |
-| ML vision model | ⚠️ Pending | Stub boundary only |
-| Dashboard HTML/JS/CSS | ⚠️ Pending | Backend API ready for integration |
-| Production secrets | ⚠️ Action needed | Set SECRET_KEY env var before production |
-| Camera image upload | ✅ Boundary defined | Vision model required for real use |
-
----
-
-## 14. Next Commands to Run
-
-```powershell
-# Install dependencies (if not already done)
-pip install -r requirements.txt
-
-# Initialise the database
-python -c "from app.database.db import initialize_database; initialize_database()"
-
-# Run the full test suite
-python -m pytest tests/ -v
-
-# Start the development server
-python app/main.py
-```
-
----
-
-## 15. Git Status
-
-Working branch: **`backend-dev`**
-
-No commits or pushes have been made by the automated implementation. All
-changes are unstaged working-tree modifications. Run `git diff` to review
-before committing.
+The repository development history includes:
+- `main` / `origin/main` (`9e83f8b`): Production base branch containing initial commits and merged hardware PR #1.
+- `origin/feature/raspberry-pi-hardware` (`6b43006`): Early hardware and coin credit prototypes.
+- `origin/backend-dev` (`1b7c6a7`): Completed Flask API, database layer, hardware abstractions, and initial 124 tests.
+- `origin/feature/frontend-dashboard` (`6df5e14`): Completed web dashboard HTML, CSS, JavaScript, and asset tests.
+- `origin/dashboard-ml-dev` (`e5f4e6f`): Completed ML vision classifier (MobileNetV2, 424 images, `device_model.pth`), Chronos-2 forecaster, and datasets.
+- `hardware-dashboard-integration`: **Unified integration branch** uniting backend, hardware abstractions, dashboard UI, and both ML features with 157 passing tests.
