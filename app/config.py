@@ -15,12 +15,14 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]  # SmartHub/
 
+_DEFAULT_SECRET_KEY = "dev-secret-change-in-production"
+
 
 class Config:
     """Shared base configuration."""
 
     # Flask
-    SECRET_KEY: str = os.environ.get("SECRET_KEY", "dev-secret-change-in-production")
+    SECRET_KEY: str = os.environ.get("SECRET_KEY", _DEFAULT_SECRET_KEY)
     DEBUG: bool = False
     TESTING: bool = False
 
@@ -36,6 +38,10 @@ class Config:
 
     # Upload safety
     MAX_CONTENT_LENGTH: int = 4 * 1024 * 1024  # 4 MB cap for image uploads
+
+    # Stale-session recovery: sessions active longer than this many hours will
+    # be marked 'failed' on startup.  Override via SESSION_TIMEOUT_HOURS env var.
+    SESSION_TIMEOUT_HOURS: int = int(os.environ.get("SESSION_TIMEOUT_HOURS", "8"))
 
 
 class DevelopmentConfig(Config):
@@ -85,3 +91,22 @@ def get_config(env: str | None = None) -> type[Config]:
         )
     return cfg
 
+
+def warn_if_insecure(cfg: type[Config]) -> None:
+    """Log a warning if SECRET_KEY is still the insecure development default.
+
+    Call this inside create_app() after loading config so that any deployment
+    that forgets to set SECRET_KEY is clearly flagged in the application log.
+    This is a no-op during automated tests (TESTING=True).
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    if (
+        getattr(cfg, "SECRET_KEY", _DEFAULT_SECRET_KEY) == _DEFAULT_SECRET_KEY
+        and not getattr(cfg, "TESTING", False)
+    ):
+        _log.warning(
+            "SECURITY WARNING: SECRET_KEY is the default development value. "
+            "Set the SECRET_KEY environment variable before deploying to production."
+        )

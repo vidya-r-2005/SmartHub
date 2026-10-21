@@ -4,6 +4,13 @@ SmartHub database helpers.
 All public functions accept an optional *db_path* parameter so that tests
 can redirect operations to an isolated temporary database without touching
 data/smarthub.db.
+
+Thread/concurrency safety
+-------------------------
+SQLite is used in WAL mode with a busy timeout.  The ``BEGIN IMMEDIATE``
+pattern in borrow/return operations ensures that concurrent writers queue
+rather than fail immediately.  ``get_connection()`` sets a 10-second busy
+timeout so that brief lock contention does not cause spurious errors.
 """
 
 import logging
@@ -28,6 +35,15 @@ _VALID_SESSION_STATUSES = frozenset({"completed", "cancelled", "failed"})
 # Valid transaction statuses
 _VALID_TRANSACTION_STATUSES = frozenset({"pending", "completed", "failed", "refunded"})
 
+# Valid payment methods accepted at the kiosk
+_VALID_PAYMENT_METHODS = frozenset({"coin", "mock", "free", "card"})
+
+# Maximum RFID UID length (prevent oversized inputs)
+_MAX_RFID_LEN = 64
+
+# After this many hours an 'active' session is considered stale
+_STALE_SESSION_HOURS = 8
+
 
 # ---------------------------------------------------------------------------
 # Connection helpers
@@ -38,12 +54,15 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     """Return a connection to the SmartHub SQLite database.
 
     Foreign-key enforcement is turned on for every connection.  The
-    ``row_factory`` is set so that rows behave like dicts.
+    ``row_factory`` is set so that rows behave like dicts.  A 10-second
+    busy timeout prevents immediate failure under brief lock contention.
+    WAL mode is enabled for better concurrent read/write throughput.
     """
     path = Path(db_path) if db_path else DATABASE_PATH
-    connection = sqlite3.connect(str(path))
+    connection = sqlite3.connect(str(path), timeout=10)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA journal_mode = WAL")
     return connection
 
 
@@ -80,8 +99,10 @@ def execute_query(
     connection = get_connection(db_path)
     try:
         cursor = connection.execute(query, parameters)
-        rows = cursor.fetchall()
-        return rows
+        return cursor.fetchall()
+    except sqlite3.Error:
+        logger.exception("execute_query failed: %s", query[:80])
+        raise
     finally:
         connection.close()
 
@@ -97,8 +118,34 @@ def execute_insert(
         cursor = connection.execute(query, parameters)
         connection.commit()
         return cursor.lastrowid
+    except sqlite3.Error:
+        connection.rollback()
+        raise
     finally:
         connection.close()
+
+
+# ---------------------------------------------------------------------------
+# Input validation helpers
+# ---------------------------------------------------------------------------
+
+
+def _validate_rfid(rfid_uid: str, label: str = "RFID UID") -> str:
+    """Strip and validate an RFID UID string.  Returns the stripped value."""
+    if not rfid_uid or not rfid_uid.strip():
+        raise ValueError(f"{label} cannot be empty")
+    stripped = rfid_uid.strip()
+    if len(stripped) > _MAX_RFID_LEN:
+        raise ValueError(
+            f"{label} is too long (max {_MAX_RFID_LEN} characters)"
+        )
+    return stripped
+
+
+def _validate_limit(limit: int) -> None:
+    """Raise ValueError if *limit* is not a positive integer."""
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        raise ValueError("limit must be a positive integer")
 
 
 # ---------------------------------------------------------------------------
@@ -112,12 +159,9 @@ def create_user(rfid_uid: str, db_path: Optional[Path] = None) -> Optional[int]:
     Returns the new user ID, or *None* if the RFID UID is already
     registered.
 
-    Raises ValueError for empty or whitespace-only UIDs.
+    Raises ValueError for empty, whitespace-only, or excessively long UIDs.
     """
-    if not rfid_uid or not rfid_uid.strip():
-        raise ValueError("RFID UID cannot be empty")
-
-    uid = rfid_uid.strip()
+    uid = _validate_rfid(rfid_uid)
     query = "INSERT INTO users (rfid_uid) VALUES (?)"
     try:
         row_id = execute_insert(query, (uid,), db_path)
@@ -181,7 +225,8 @@ def create_session(
                 if cursor.lastrowid is None or cursor.rowcount == 0:
                     raise ValueError(f"Unknown service: {service_name!r}")
 
-                # Verify service_id was actually resolved (not NULL)
+                # Verify service_id was actually resolved (not NULL due to
+                # subquery returning no rows)
                 row = connection.execute(
                     "SELECT service_id FROM sessions WHERE id = ?",
                     (cursor.lastrowid,),
@@ -217,6 +262,24 @@ def get_session(
     """
     rows = execute_query(query, (session_id,), db_path)
     return rows[0] if rows else None
+
+
+def get_active_sessions_for_user(
+    user_id: int,
+    service_name: str,
+    db_path: Optional[Path] = None,
+) -> list[sqlite3.Row]:
+    """Return all currently active sessions for *user_id* in *service_name*."""
+    query = """
+        SELECT s.id, s.user_id, sv.name AS service_name, s.started_at, s.status
+        FROM sessions AS s
+        JOIN services AS sv ON s.service_id = sv.id
+        WHERE s.user_id = ?
+          AND sv.name = ?
+          AND s.status = 'active'
+        ORDER BY s.id DESC
+    """
+    return execute_query(query, (user_id, service_name.upper()), db_path)
 
 
 def end_session(
@@ -263,6 +326,44 @@ def end_session(
         connection.close()
 
 
+def timeout_stale_sessions(
+    hours: int = _STALE_SESSION_HOURS,
+    db_path: Optional[Path] = None,
+) -> int:
+    """Mark sessions that have been 'active' for more than *hours* as 'failed'.
+
+    This is a recovery mechanism for sessions left open after a crash or
+    power loss.  Returns the number of sessions that were closed.
+
+    Should be called at application startup and/or on a periodic schedule.
+    """
+    if not isinstance(hours, int) or hours < 1:
+        raise ValueError("hours must be a positive integer")
+
+    query = """
+        UPDATE sessions
+        SET ended_at = CURRENT_TIMESTAMP,
+            duration_seconds = CAST(
+                (julianday(CURRENT_TIMESTAMP) - julianday(started_at))
+                * 86400 AS INTEGER
+            ),
+            status = 'failed'
+        WHERE status = 'active'
+          AND julianday(CURRENT_TIMESTAMP) - julianday(started_at) > ?
+    """
+    days_threshold = hours / 24.0
+    connection = get_connection(db_path)
+    try:
+        with connection:
+            cursor = connection.execute(query, (days_threshold,))
+            count = cursor.rowcount
+            if count > 0:
+                logger.warning("Timed out %d stale session(s)", count)
+            return count
+    finally:
+        connection.close()
+
+
 def get_sessions_by_service(
     service_name: str,
     limit: int = 50,
@@ -296,7 +397,8 @@ def record_transaction(
 ) -> int:
     """Record a payment transaction.
 
-    Raises ValueError for negative amounts or unsupported statuses.
+    Raises ValueError for negative amounts, unsupported statuses, or
+    unrecognised payment methods.
     """
     if not isinstance(amount, (int, float)) or isinstance(amount, bool):
         raise ValueError("Transaction amount must be a number")
@@ -304,6 +406,12 @@ def record_transaction(
         raise ValueError("Transaction amount cannot be negative")
     if not payment_method or not payment_method.strip():
         raise ValueError("Payment method cannot be empty")
+    pm = payment_method.strip().lower()
+    if pm not in _VALID_PAYMENT_METHODS:
+        raise ValueError(
+            f"Invalid payment method {payment_method!r}. "
+            f"Expected one of: {sorted(_VALID_PAYMENT_METHODS)}"
+        )
     if status not in _VALID_TRANSACTION_STATUSES:
         raise ValueError(
             f"Invalid transaction status {status!r}. "
@@ -314,25 +422,39 @@ def record_transaction(
         INSERT INTO transactions (session_id, amount, payment_method, status)
         VALUES (?, ?, ?, ?)
     """
-    return execute_insert(
-        query, (session_id, amount, payment_method.strip(), status), db_path
-    )
+    return execute_insert(query, (session_id, amount, pm, status), db_path)
 
 
 def get_transactions(
-    limit: int = 50, db_path: Optional[Path] = None
+    limit: int = 50,
+    session_id: Optional[int] = None,
+    db_path: Optional[Path] = None,
 ) -> list[sqlite3.Row]:
-    """Return recent transactions, newest first."""
+    """Return recent transactions, newest first.
+
+    If *session_id* is provided, only transactions for that session are
+    returned.
+    """
     _validate_limit(limit)
+    if session_id is not None:
+        query = """
+            SELECT
+                t.id, t.session_id, t.amount, t.payment_method,
+                t.status, t.created_at, s.user_id,
+                sv.name AS service_name
+            FROM transactions AS t
+            LEFT JOIN sessions AS s ON t.session_id = s.id
+            LEFT JOIN services AS sv ON s.service_id = sv.id
+            WHERE t.session_id = ?
+            ORDER BY t.id DESC
+            LIMIT ?
+        """
+        return execute_query(query, (session_id, limit), db_path)
+
     query = """
         SELECT
-            t.id,
-            t.session_id,
-            t.amount,
-            t.payment_method,
-            t.status,
-            t.created_at,
-            s.user_id,
+            t.id, t.session_id, t.amount, t.payment_method,
+            t.status, t.created_at, s.user_id,
             sv.name AS service_name
         FROM transactions AS t
         LEFT JOIN sessions AS s ON t.session_id = s.id
@@ -358,14 +480,16 @@ def create_item(
     Returns the new item ID, or *None* if the RFID UID is already
     registered.
     """
-    if not rfid_uid or not rfid_uid.strip():
-        raise ValueError("RFID UID cannot be empty")
+    uid = _validate_rfid(rfid_uid, label="Item RFID UID")
     if not item_type or not item_type.strip():
         raise ValueError("Item type cannot be empty")
+    it = item_type.strip()
+    if len(it) > 64:
+        raise ValueError("Item type is too long (max 64 characters)")
 
     query = "INSERT INTO items (rfid_uid, item_type, status) VALUES (?, ?, 'available')"
     try:
-        return execute_insert(query, (rfid_uid.strip(), item_type.strip()), db_path)
+        return execute_insert(query, (uid, it), db_path)
     except sqlite3.IntegrityError:
         logger.debug("Duplicate item RFID: %s", rfid_uid)
         return None
@@ -388,6 +512,15 @@ def get_item_by_rfid(
     """Return the item row matching *rfid_uid*, or *None*."""
     query = "SELECT id, rfid_uid, item_type, status FROM items WHERE rfid_uid = ?"
     rows = execute_query(query, (rfid_uid,), db_path)
+    return rows[0] if rows else None
+
+
+def get_item_by_id(
+    item_id: int, db_path: Optional[Path] = None
+) -> Optional[sqlite3.Row]:
+    """Return the item row with the given *item_id*, or *None*."""
+    query = "SELECT id, rfid_uid, item_type, status, created_at FROM items WHERE id = ?"
+    rows = execute_query(query, (item_id,), db_path)
     return rows[0] if rows else None
 
 
@@ -627,14 +760,3 @@ def get_usage_metrics(
         LIMIT ?
     """
     return execute_query(query, (limit,), db_path)
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _validate_limit(limit: int) -> None:
-    """Raise ValueError if *limit* is not a positive integer."""
-    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
-        raise ValueError("limit must be a positive integer")

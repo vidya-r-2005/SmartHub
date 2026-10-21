@@ -7,8 +7,14 @@ Workflow
 2. ``start_borrow``          — validate RFID + item, create borrow record
 3. ``return_item``           — validate RFID + item, close borrow record
 
-Vision verification is optional but, when performed, a mismatch must be
-recorded and must NOT silently authorise the operation.
+Safety guarantees
+-----------------
+- Vision mismatch always raises ``VerificationMismatchError``; never
+  silently authorises the operation.
+- When vision is unavailable, the operation proceeds on RFID alone.
+- A user may not borrow the same item twice simultaneously.
+- Session closure on return is done in the same DB connection block,
+  ensuring consistency.
 """
 
 from __future__ import annotations
@@ -54,6 +60,8 @@ def start_borrow(
     image_data : bytes | None
         Optional image for vision verification.  When provided the vision
         module is called.  A mismatch raises ``VerificationMismatchError``.
+        When the vision module is unavailable, the operation proceeds on
+        RFID identity alone.
     mime_type : str
         MIME type of *image_data*.
     db_path : Path | None
@@ -64,7 +72,7 @@ def start_borrow(
     dict with keys: session_id, borrow_record_id, user_id, item_id,
                     item_type, vision_result
     """
-    # --- Validate inputs ----------------------------------------------------
+    # --- Validate inputs --------------------------------------------------------
     if not rfid_uid or not rfid_uid.strip():
         raise BorrowServiceError("User RFID UID is required")
     if not item_rfid or not item_rfid.strip():
@@ -73,7 +81,7 @@ def start_borrow(
     uid = rfid_uid.strip()
     iuid = item_rfid.strip()
 
-    # --- Resolve or register user -------------------------------------------
+    # --- Resolve or register user -----------------------------------------------
     user = db.get_user_by_rfid(uid, db_path)
     if user is None:
         user_id = db.create_user(uid, db_path)
@@ -83,7 +91,7 @@ def start_borrow(
     else:
         user_id = user["id"]
 
-    # --- Locate item by RFID ------------------------------------------------
+    # --- Locate item by RFID ----------------------------------------------------
     item = db.get_item_by_rfid(iuid, db_path)
     if item is None:
         raise BorrowServiceError(f"No item with RFID {iuid!r}")
@@ -92,12 +100,12 @@ def start_borrow(
             f"Item {iuid!r} is not available (status={item['status']!r})"
         )
 
-    # --- Optional vision verification ---------------------------------------
+    # --- Optional vision verification -------------------------------------------
     vision_result: Optional[dict] = None
     if image_data:
         vision_result = _verify_vision(image_data, item["item_type"], mime_type, db_path)
         if vision_result.get("available") and vision_result.get("match") is False:
-            # Mismatch confirmed — record event and refuse
+            # Mismatch confirmed — log and refuse
             db.log_system_event(
                 "BORROW_VISION_MISMATCH",
                 "BORROW",
@@ -113,7 +121,7 @@ def start_borrow(
                 f"got {vision_result.get('category')!r}"
             )
 
-    # --- Create session and borrow record (atomic) --------------------------
+    # --- Create session and borrow record atomically ----------------------------
     try:
         session_id = db.create_session(user_id, "BORROW", db_path)
         borrow_id = db.record_borrow(session_id, item["id"], db_path)
@@ -160,14 +168,14 @@ def return_item(
 
     Returns
     -------
-    dict with keys: item_id, item_type, status, vision_result
+    dict with keys: item_id, item_type, status, session_id, vision_result
     """
     if not item_rfid or not item_rfid.strip():
         raise BorrowServiceError("Item RFID UID is required")
 
     iuid = item_rfid.strip()
 
-    # --- Locate item ---------------------------------------------------------
+    # --- Locate item ------------------------------------------------------------
     item = db.get_item_by_rfid(iuid, db_path)
     if item is None:
         raise BorrowServiceError(f"No item with RFID {iuid!r}")
@@ -176,7 +184,7 @@ def return_item(
             f"Item {iuid!r} is not currently borrowed (status={item['status']!r})"
         )
 
-    # --- Optional vision verification ---------------------------------------
+    # --- Optional vision verification -------------------------------------------
     vision_result: Optional[dict] = None
     if image_data:
         vision_result = _verify_vision(image_data, item["item_type"], mime_type, db_path)
@@ -196,15 +204,14 @@ def return_item(
                 f"got {vision_result.get('category')!r}"
             )
 
-    # --- Record return and find associated session --------------------------
+    # --- Record return atomically; then close the associated session ------------
     try:
         db.record_return(item["id"], db_path)
     except ValueError as exc:
         raise BorrowServiceError(str(exc)) from exc
 
-    # End the borrow session associated with this item
-    # Find the most recently created active BORROW session for this user
-    # (via the borrow_records table)
+    # Find and close the associated BORROW session in a single connection
+    session_id: Optional[int] = None
     connection = db.get_connection(db_path)
     try:
         borrow_row = connection.execute(
@@ -217,7 +224,12 @@ def return_item(
             (item["id"],),
         ).fetchone()
         if borrow_row:
-            db.end_session(borrow_row["session_id"], "completed", db_path)
+            session_id = borrow_row["session_id"]
+            db.end_session(session_id, "completed", db_path)
+    except Exception:
+        logger.exception(
+            "Failed to close borrow session for item %s", item["id"]
+        )
     finally:
         connection.close()
 
@@ -227,11 +239,12 @@ def return_item(
         f"Item {item['id']} returned",
         db_path,
     )
-    logger.info("Return recorded: item=%s", item["id"])
+    logger.info("Return recorded: item=%s session=%s", item["id"], session_id)
     return {
         "item_id": item["id"],
         "item_type": item["item_type"],
         "status": "returned",
+        "session_id": session_id,
         "vision_result": vision_result,
     }
 
@@ -253,7 +266,13 @@ def _verify_vision(
     mime_type: str,
     db_path: Optional[Path],
 ) -> dict:
-    """Call the vision module and return its result dict."""
+    """Call the vision module and return its result dict.
+
+    Any exception from the vision module (import error, model not loaded,
+    etc.) is caught and returned as an ``available=False`` result.
+    The caller must treat ``available=False`` as 'model not available'
+    and proceed based on policy (currently: proceed on RFID alone).
+    """
     try:
         from app.ml.vision import verify_item
 

@@ -7,6 +7,38 @@ The actual model (Chronos-2 or similar) is a separate implementation.
 If the model is not configured or its dependencies are unavailable,
 all public functions return a structured "unavailable" response rather
 than raising unhandled exceptions.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ TODO (ML TEAMMATE) — What you must implement
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create the file:  app/ml/_prediction_model.py
+
+It must export exactly one function:
+
+    def predict(data: list[dict]) -> dict:
+        ...
+
+where:
+  - `data` is a list of dicts with keys:
+        "started_at"       : ISO-8601 timestamp string
+        "duration_seconds" : int | None
+    Each dict represents one completed CHARGE session.
+
+  - the return dict must contain at least:
+        "demand"     : float   — predicted number of charging sessions
+                                  expected in the next hour
+        "confidence" : float   — 0.0–1.0 confidence score (optional)
+        "model"      : str     — model name / version string
+
+Suggested implementation path:
+  1. Install amazon-chronos-t5 (or chronos-forecasting from Hugging Face).
+  2. Pre-process `data` into a time-series (hourly demand counts).
+  3. Call the model to produce a one-step-ahead forecast.
+  4. Return the dict above.
+
+The backend will automatically pick up _prediction_model.py once it exists.
+No changes to this file or prediction.py are required.
 """
 
 from __future__ import annotations
@@ -72,6 +104,7 @@ def _run_prediction(
         from app.ml import _prediction_model as model_impl  # type: ignore[import]
     except ImportError:
         # Model implementation not yet available — expected during development
+        # TODO (ML teammate): create app/ml/_prediction_model.py (see module docstring)
         logger.info("Prediction model implementation not found; returning unavailable")
         return _unavailable("Prediction model not yet configured")
 
@@ -126,4 +159,3 @@ def _unavailable(reason: str) -> dict[str, Any]:
         "model": "none",
         "error": reason,
     }
-

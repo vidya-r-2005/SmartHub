@@ -18,10 +18,13 @@ from typing import Any
 
 from flask import Flask, jsonify, request
 
-from app.config import Config, get_config
+from app.config import Config, get_config, warn_if_insecure
 from app.database import db as database
 
 logger = logging.getLogger(__name__)
+
+# Maximum allowed RFID UID length (matches db._MAX_RFID_LEN)
+_MAX_RFID_LEN = 64
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +59,26 @@ def create_app(config: type[Config] | None = None) -> Flask:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    # Warn if SECRET_KEY is still the insecure default (no-op in testing)
+    warn_if_insecure(cfg)
+
+    # Initialise database and recover stale sessions from previous crashes
+    with app.app_context():
+        try:
+            database.initialize_database(db_path=cfg.DATABASE_PATH)
+            timeout_hours = getattr(cfg, "SESSION_TIMEOUT_HOURS", 8)
+            recovered = database.timeout_stale_sessions(
+                hours=timeout_hours, db_path=cfg.DATABASE_PATH
+            )
+            if recovered:
+                logger.warning(
+                    "Recovered %d stale session(s) on startup (threshold=%dh)",
+                    recovered,
+                    timeout_hours,
+                )
+        except Exception:
+            logger.exception("Database initialisation failed — continuing anyway")
+
     # Register blueprints / route groups
     _register_routes(app)
 
@@ -72,6 +95,17 @@ def create_app(config: type[Config] | None = None) -> Flask:
 
 def _db_path(app: Flask) -> Path:
     return Path(app.config["DB_PATH"])
+
+
+def _validate_rfid_param(uid: str, label: str = "rfid_uid") -> tuple | None:
+    """Return an error tuple if *uid* is empty or exceeds the max length."""
+    if not uid:
+        return _err(f"{label} is required", 400)
+    if len(uid) > _MAX_RFID_LEN:
+        return _err(
+            f"{label} exceeds maximum length of {_MAX_RFID_LEN} characters", 400
+        )
+    return None
 
 
 def _register_routes(app: Flask) -> None:
@@ -108,9 +142,13 @@ def _register_routes(app: Flask) -> None:
         if isinstance(data, tuple):
             return data
         rfid_uid = data.get("rfid_uid", "").strip()
-        if not rfid_uid:
-            return _err("rfid_uid is required", 400)
-        user_id = database.create_user(rfid_uid, db_path=_db_path(app))
+        err = _validate_rfid_param(rfid_uid)
+        if err:
+            return err
+        try:
+            user_id = database.create_user(rfid_uid, db_path=_db_path(app))
+        except ValueError as exc:
+            return _err(str(exc), 400)
         if user_id is None:
             return _err("RFID UID already registered", 409)
         return jsonify({"user_id": user_id, "rfid_uid": rfid_uid}), 201
@@ -124,6 +162,9 @@ def _register_routes(app: Flask) -> None:
 
     @app.get("/api/users/rfid/<string:uid>")
     def get_user_by_rfid(uid: str):
+        err = _validate_rfid_param(uid, label="uid")
+        if err:
+            return err
         user = database.get_user_by_rfid(uid, db_path=_db_path(app))
         if user is None:
             return _err("User not found", 404)
@@ -139,8 +180,9 @@ def _register_routes(app: Flask) -> None:
         rfid_uid = data.get("rfid_uid", "").strip()
         amount = data.get("amount", 0)
         payment_method = data.get("payment_method", "coin")
-        if not rfid_uid:
-            return _err("rfid_uid is required", 400)
+        err = _validate_rfid_param(rfid_uid)
+        if err:
+            return err
         try:
             amount = float(amount)
         except (TypeError, ValueError):
@@ -209,6 +251,18 @@ def _register_routes(app: Flask) -> None:
             return _err("Charging session not found", 404)
         return jsonify(s), 200
 
+    @app.get("/api/charge/sessions/<int:session_id>/transactions")
+    def charge_session_transactions(session_id: int):
+        """Return all payment transactions for a specific charge session."""
+        from app.services.charge import get_charge_transactions, get_charge_session
+
+        # Verify the session exists and belongs to CHARGE
+        s = get_charge_session(session_id, db_path=_db_path(app))
+        if s is None:
+            return _err("Charging session not found", 404)
+        txns = get_charge_transactions(session_id, db_path=_db_path(app))
+        return jsonify(txns), 200
+
     # --- Store -----------------------------------------------------------------
 
     @app.post("/api/store/start")
@@ -217,8 +271,9 @@ def _register_routes(app: Flask) -> None:
         if isinstance(data, tuple):
             return data
         rfid_uid = data.get("rfid_uid", "").strip()
-        if not rfid_uid:
-            return _err("rfid_uid is required", 400)
+        err = _validate_rfid_param(rfid_uid)
+        if err:
+            return err
 
         from app.services.store import start_storage_session, StoreServiceError
 
@@ -270,6 +325,28 @@ def _register_routes(app: Flask) -> None:
         except StoreServiceError as exc:
             return _err(str(exc), 400)
 
+    @app.post("/api/store/cancel")
+    def store_cancel():
+        """Cancel an active storage session (locks the locker and marks cancelled)."""
+        data = _require_json()
+        if isinstance(data, tuple):
+            return data
+        session_id = data.get("session_id")
+        if session_id is None:
+            return _err("session_id is required", 400)
+        try:
+            session_id = int(session_id)
+        except (TypeError, ValueError):
+            return _err("session_id must be an integer", 400)
+
+        from app.services.store import cancel_storage_session, StoreServiceError
+
+        try:
+            result = cancel_storage_session(session_id=session_id, db_path=_db_path(app))
+            return jsonify(result), 200
+        except StoreServiceError as exc:
+            return _err(str(exc), 400)
+
     @app.get("/api/store/sessions")
     def store_sessions():
         limit = _parse_int_param("limit", default=50)
@@ -294,10 +371,12 @@ def _register_routes(app: Flask) -> None:
             return data
         rfid_uid = data.get("rfid_uid", "").strip()
         item_rfid = data.get("item_rfid", "").strip()
-        if not rfid_uid:
-            return _err("rfid_uid is required", 400)
-        if not item_rfid:
-            return _err("item_rfid is required", 400)
+        err = _validate_rfid_param(rfid_uid)
+        if err:
+            return err
+        err = _validate_rfid_param(item_rfid, label="item_rfid")
+        if err:
+            return err
 
         from app.services.borrow import (
             start_borrow,
@@ -326,8 +405,9 @@ def _register_routes(app: Flask) -> None:
         if isinstance(data, tuple):
             return data
         item_rfid = data.get("item_rfid", "").strip()
-        if not item_rfid:
-            return _err("item_rfid is required", 400)
+        err = _validate_rfid_param(item_rfid, label="item_rfid")
+        if err:
+            return err
 
         from app.services.borrow import return_item, BorrowServiceError, VerificationMismatchError
 
@@ -421,9 +501,13 @@ def _register_routes(app: Flask) -> None:
 
     @app.get("/")
     def index():
-        from flask import render_template
+        try:
+            from flask import render_template
 
-        return render_template("index.html")
+            return render_template("index.html")
+        except Exception:
+            # Template not yet implemented by dashboard teammate
+            return jsonify({"service": "SmartHub", "status": "ok"}), 200
 
 
 # ---------------------------------------------------------------------------
@@ -493,12 +577,8 @@ if __name__ == "__main__":
     _cfg = get_config()
     _app = create_app(_cfg)
 
-    # Initialise the database on first run (safe — uses IF NOT EXISTS)
-    database.initialize_database(db_path=_cfg.DATABASE_PATH)
-
     _app.run(
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
         debug=_cfg.DEBUG,
     )
-

@@ -4,6 +4,12 @@ CHARGE service — business logic layer.
 Orchestrates charging sessions, payment collection, hardware control,
 and database persistence.  All hardware access goes through injectable
 controller objects so tests can pass mocks.
+
+Concurrency policy
+------------------
+A user may not have two simultaneous CHARGE sessions.  If one is already
+active when a new start request arrives, a ``ChargeServiceError`` is raised
+rather than creating a duplicate.
 """
 
 from __future__ import annotations
@@ -21,6 +27,9 @@ logger = logging.getLogger(__name__)
 # Minimum payment required to start a charging session (currency units)
 MINIMUM_CHARGE_AMOUNT = 0.0  # Allow free/zero-payment sessions (campus kiosk)
 MAXIMUM_CHARGE_AMOUNT = 10_000.0  # Sanity cap
+
+# Payment methods accepted for charging
+_VALID_PAYMENT_METHODS = frozenset({"coin", "mock", "free", "card"})
 
 
 class ChargeServiceError(Exception):
@@ -44,11 +53,11 @@ def start_charging_session(
     amount : float
         Payment amount to record.
     payment_method : str
-        Payment method string (e.g. "coin", "mock").
+        One of 'coin', 'mock', 'free', or 'card'.
     charging_controller : ChargingController | None
         Hardware abstraction.  A simulation controller is used if None.
     coin_acceptor : CoinAcceptor | None
-        Coin acceptor abstraction (not used for mock payments).
+        Coin acceptor abstraction (unused for mock/free payments).
     db_path : Path | None
         Override database path (tests use a temp path).
 
@@ -56,29 +65,29 @@ def start_charging_session(
     -------
     dict with keys: session_id, transaction_id, user_id, status
     """
-    # --- Validate inputs ----------------------------------------------------
+    # --- Validate inputs --------------------------------------------------------
     if not rfid_uid or not rfid_uid.strip():
         raise ChargeServiceError("RFID UID is required")
 
     if not isinstance(amount, (int, float)) or isinstance(amount, bool):
         raise ChargeServiceError("amount must be a number")
-
     if amount < MINIMUM_CHARGE_AMOUNT:
-        raise ChargeServiceError(
-            f"amount must be >= {MINIMUM_CHARGE_AMOUNT}"
-        )
-
+        raise ChargeServiceError(f"amount must be >= {MINIMUM_CHARGE_AMOUNT}")
     if amount > MAXIMUM_CHARGE_AMOUNT:
-        raise ChargeServiceError(
-            f"amount must be <= {MAXIMUM_CHARGE_AMOUNT}"
-        )
+        raise ChargeServiceError(f"amount must be <= {MAXIMUM_CHARGE_AMOUNT}")
 
     if not payment_method or not payment_method.strip():
         raise ChargeServiceError("payment_method cannot be empty")
+    pm = payment_method.strip().lower()
+    if pm not in _VALID_PAYMENT_METHODS:
+        raise ChargeServiceError(
+            f"Invalid payment method {payment_method!r}. "
+            f"Accepted: {sorted(_VALID_PAYMENT_METHODS)}"
+        )
 
     uid = rfid_uid.strip()
 
-    # --- Ensure user exists -------------------------------------------------
+    # --- Ensure user exists -----------------------------------------------------
     user = db.get_user_by_rfid(uid, db_path)
     if user is None:
         user_id = db.create_user(uid, db_path)
@@ -90,18 +99,26 @@ def start_charging_session(
     else:
         user_id = user["id"]
 
-    # --- Create session ------------------------------------------------------
+    # --- Prevent duplicate active CHARGE sessions for the same user ------------
+    existing = db.get_active_sessions_for_user(user_id, "CHARGE", db_path)
+    if existing:
+        raise ChargeServiceError(
+            f"User already has an active CHARGE session (id={existing[0]['id']}). "
+            "Stop the existing session before starting a new one."
+        )
+
+    # --- Create session ---------------------------------------------------------
     try:
         session_id = db.create_session(user_id, "CHARGE", db_path)
     except ValueError as exc:
         raise ChargeServiceError(str(exc)) from exc
 
-    # --- Enable hardware charging port ---------------------------------------
+    # --- Enable hardware charging port -----------------------------------------
     ctrl = charging_controller or ChargingController(simulation=True)
     hw_ok = ctrl.enable()
 
     if not hw_ok:
-        # Hardware failed — cancel session and do not record payment
+        # Hardware failed — cancel session immediately; do NOT record payment
         db.end_session(session_id, "failed", db_path)
         db.log_system_event(
             "CHARGE_HW_FAILURE",
@@ -111,17 +128,17 @@ def start_charging_session(
         )
         raise ChargeServiceError("Charging hardware failed to enable")
 
-    # --- Record transaction --------------------------------------------------
+    # --- Record transaction -----------------------------------------------------
     try:
         transaction_id = db.record_transaction(
             amount=amount,
             session_id=session_id,
-            payment_method=payment_method.strip(),
+            payment_method=pm,
             status="completed",
             db_path=db_path,
         )
-    except (ValueError, Exception) as exc:
-        # Attempt to cancel session cleanly; hardware already enabled
+    except Exception as exc:
+        # Transaction recording failed — cancel session; hardware already enabled
         db.end_session(session_id, "failed", db_path)
         ctrl.disable()
         raise ChargeServiceError(f"Failed to record transaction: {exc}") from exc
@@ -129,7 +146,7 @@ def start_charging_session(
     db.log_system_event(
         "CHARGE_START",
         "CHARGE",
-        f"Session {session_id} started for user {user_id}, amount={amount}",
+        f"Session {session_id} started for user {user_id}, amount={amount:.2f}",
         db_path,
     )
     logger.info(
@@ -167,27 +184,29 @@ def stop_charging_session(
     dict with keys: session_id, status, duration_seconds
     """
     if final_status not in ("completed", "cancelled", "failed"):
-        raise ChargeServiceError(
-            f"Invalid final status {final_status!r}"
-        )
+        raise ChargeServiceError(f"Invalid final status {final_status!r}")
 
     # Verify session exists and is active
     session = db.get_session(session_id, db_path)
     if session is None:
         raise ChargeServiceError(f"Session {session_id} does not exist")
-
     if session["status"] != "active":
         raise ChargeServiceError(
             f"Session {session_id} is not active (status={session['status']!r})"
         )
 
-    # Disable hardware
+    # Disable hardware — if it fails, downgrade status to 'failed'
     ctrl = charging_controller or ChargingController(simulation=True)
     hw_ok = ctrl.disable()
     if not hw_ok:
         logger.error("Failed to disable charging port for session %d", session_id)
-        # Record as failed but still end the database session
         final_status = "failed"
+        db.log_system_event(
+            "CHARGE_HW_DISABLE_FAILURE",
+            "CHARGE",
+            f"Failed to disable charging port for session {session_id}",
+            db_path,
+        )
 
     ended = db.end_session(session_id, final_status, db_path)
     if not ended:
@@ -195,7 +214,7 @@ def stop_charging_session(
             f"Could not end session {session_id} — it may already be closed"
         )
 
-    # Re-fetch to get duration
+    # Re-fetch to get computed duration
     updated = db.get_session(session_id, db_path)
     duration = updated["duration_seconds"] if updated else None
 
@@ -227,7 +246,7 @@ def get_charge_sessions(limit: int = 50, db_path: Optional[Path] = None) -> list
 def get_charge_session(
     session_id: int, db_path: Optional[Path] = None
 ) -> Optional[dict]:
-    """Return a single session dict or None."""
+    """Return a single CHARGE session dict, or None if not found."""
     row = db.get_session(session_id, db_path)
     if row is None:
         return None
@@ -236,3 +255,10 @@ def get_charge_session(
         return None
     return s
 
+
+def get_charge_transactions(
+    session_id: int, db_path: Optional[Path] = None
+) -> list[dict]:
+    """Return all transactions for a specific CHARGE session."""
+    rows = db.get_transactions(session_id=session_id, db_path=db_path)
+    return [dict(row) for row in rows]
