@@ -5,7 +5,28 @@ Hardware is replaced by simulation controllers.
 All tests use isolated temporary databases.
 """
 
-import pytest
+try:
+    import pytest
+except ImportError:
+    class _MockPytest:
+        class raises:
+            def __init__(self, expected_exc, match=None):
+                self.expected_exc = expected_exc
+                self.match = match
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    raise AssertionError(f"Expected {self.expected_exc.__name__} was not raised")
+                if not issubclass(exc_type, self.expected_exc):
+                    return False
+                if self.match and self.match not in str(exc_val):
+                    raise AssertionError(f"Exception message '{exc_val}' does not match '{self.match}'")
+                return True
+
+    pytest = _MockPytest()  # type: ignore
 
 from app.services.charge import (
     ChargeServiceError,
@@ -238,4 +259,39 @@ def test_get_charge_session_returns_session(tmp_db):
 
 def test_get_charge_session_nonexistent_returns_none(tmp_db):
     assert get_charge_session(99999, db_path=tmp_db) is None
+
+
+# ---------------------------------------------------------------------------
+# Pricing Rule Tests (1 coin = 5 min = 300s)
+# ---------------------------------------------------------------------------
+
+
+def test_start_session_pricing_duration_conversion(tmp_db):
+    # 1 coin (₹5) -> 300s
+    res1 = start_charging_session(
+        rfid_uid="COIN_USER_1",
+        amount=5.0,
+        charging_controller=_sim_ctrl(),
+        db_path=tmp_db,
+    )
+    assert res1["duration_seconds"] == 300
+
+    # 2 coins (₹10) -> 600s
+    res2 = start_charging_session(
+        rfid_uid="COIN_USER_2",
+        amount=10.0,
+        charging_controller=_sim_ctrl(),
+        db_path=tmp_db,
+    )
+    assert res2["duration_seconds"] == 600
+
+    # 3 coins (₹15) -> 900s
+    res3 = start_charging_session(
+        rfid_uid="COIN_USER_3",
+        amount=15.0,
+        charging_controller=_sim_ctrl(),
+        db_path=tmp_db,
+    )
+    assert res3["duration_seconds"] == 900
+
 

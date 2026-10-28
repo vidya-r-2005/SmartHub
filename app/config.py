@@ -37,6 +37,39 @@ class Config:
     CHARGING_PORT_CAPACITY: int = int(os.environ.get("CHARGING_PORT_CAPACITY", "16"))
     POWER_BANK_BAY_CAPACITY: int = int(os.environ.get("POWER_BANK_BAY_CAPACITY", "12"))
 
+    # Hardware GPIO Pin Configuration (Raspberry Pi BCM)
+    PIN_CONFIG: dict[str, int] = {
+        # RC522 RFID SPI0
+        "RFID_SDA": 8,   # Physical Pin 24 (CE0)
+        "RFID_SCK": 11,  # Physical Pin 23
+        "RFID_MOSI": 10, # Physical Pin 19
+        "RFID_MISO": 9,  # Physical Pin 21
+        "RFID_RST": 25,  # Physical Pin 22
+
+        # 16x2 I2C Character LCD (Bus 1)
+        "LCD_SDA": 2,    # Physical Pin 3
+        "LCD_SCL": 3,    # Physical Pin 5
+
+        # Push-Buttons (Internal Pull-Up)
+        "BUTTON_CHARGE": 5,        # Physical Pin 29
+        "BUTTON_STORE": 6,         # Physical Pin 31
+        "BUTTON_BORROW": 13,       # Physical Pin 33
+        "BUTTON_BACK_CONFIRM": 19, # Physical Pin 35
+
+        # Coin Acceptor (Pulse Input)
+        "COIN_PULSE": 17,          # Physical Pin 11
+
+        # Actuators
+        "RELAY_CHARGING": 27,      # Physical Pin 13
+        "SERVO_LOCK": 18,          # Physical Pin 12 (PWM)
+        "BUZZER": 22,              # Physical Pin 15 (PWM)
+
+        # Status Indicator LEDs
+        "LED_GREEN": 20,           # Physical Pin 38
+        "LED_RED": 21,             # Physical Pin 40
+        "LED_BLUE": 26,            # Physical Pin 37
+    }
+
     # Logging
     LOG_LEVEL: str = "INFO"
 

@@ -125,7 +125,16 @@ def start_charging_session(
 
     # --- Enable hardware charging port -----------------------------------------
     ctrl = charging_controller or ChargingController(simulation=True)
+    # Calculate duration according to confirmed pricing rule: 1 coin (Rs 5) = 300 seconds
+    coins = max(1, int(round(amount / 5.0))) if amount > 0 else 1
+    duration_seconds = coins * 300
+
     hw_ok = ctrl.enable()
+    if hw_ok and hasattr(ctrl, "start") and callable(ctrl.start):
+        try:
+            ctrl.start(duration_seconds)
+        except Exception:
+            hw_ok = False
 
     if not hw_ok:
         # Hardware failed — cancel session immediately; do NOT record payment
@@ -150,7 +159,10 @@ def start_charging_session(
     except Exception as exc:
         # Transaction recording failed — cancel session; hardware already enabled
         db.end_session(session_id, "failed", db_path)
-        ctrl.disable()
+        if hasattr(ctrl, "stop") and callable(ctrl.stop):
+            ctrl.stop()
+        else:
+            ctrl.disable()
         raise ChargeServiceError(f"Failed to record transaction: {exc}") from exc
 
     db.log_system_event(
@@ -160,13 +172,18 @@ def start_charging_session(
         db_path,
     )
     logger.info(
-        "Charging started: session=%s user=%s amount=%.2f", session_id, user_id, amount
+        "Charging started: session=%s user=%s amount=%.2f duration=%ds",
+        session_id,
+        user_id,
+        amount,
+        duration_seconds,
     )
     return {
         "session_id": session_id,
         "transaction_id": transaction_id,
         "user_id": user_id,
         "status": "active",
+        "duration_seconds": duration_seconds,
     }
 
 

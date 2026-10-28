@@ -208,13 +208,15 @@ Hardware abstractions in `app/hardware/` automatically detect whether physical G
 When deployed on a Raspberry Pi:
 | Component | Interface / Pins | Physical Driver |
 |-----------|------------------|-----------------|
-| RFID Reader | SPI (MISO, MOSI, SCK, CS: GPIO 8, RST: GPIO 25) | `mfrc522` / `SimpleMFRC522` |
-| LCD Display | I2C (SDA: GPIO 2, SCL: GPIO 3, Addr: `0x27`) | `smbus2` / `RPLCD` |
-| Coin Acceptor | GPIO 17 (Interrupt pulse counter) | `RPi.GPIO` |
-| Locker Solenoid | GPIO 22 (Active-High Relay / MOSFET) | `RPi.GPIO` |
-| Charging Relay | GPIO 27 (Active-High Relay) | `RPi.GPIO` |
-| Buzzer | GPIO 18 (PWM frequency output) | `RPi.GPIO` |
-| Push Buttons | GPIO 23, 24 (Internal pull-up) | `RPi.GPIO` |
+| RFID Reader | SPI (MISO: GPIO 9, MOSI: GPIO 10, SCK: GPIO 11, SDA: GPIO 8, RST: GPIO 25) | `mfrc522` / `SimpleMFRC522` |
+| LCD Display | I2C (SDA: GPIO 2, SCL: GPIO 3, Bus 1, Addr: `0x27`) | `smbus2` / `RPLCD` |
+| Navigation Buttons | GPIO 5 (CHARGE), GPIO 6 (STORE), GPIO 13 (BORROW), GPIO 19 (BACK_CONFIRM) | `RPi.GPIO` (Internal Pull-Up) |
+| Coin Acceptor | GPIO 17 (Pulse counter, ₹5 single denomination) | `RPi.GPIO` |
+| Charging Relay | GPIO 27 (Low-voltage 5V charging power switch) | `RPi.GPIO` / `app.hardware.relay` |
+| Locker Servo | GPIO 18 (PWM servo actuator with safe pulse release) | `RPi.GPIO.PWM` / `gpiozero` |
+| Buzzer | GPIO 22 (PWM audio feedback) | `RPi.GPIO.PWM` |
+| Status LEDs | GPIO 20 (Green: Ready), GPIO 21 (Red: Error), GPIO 26 (Blue: Busy/Charge) | `RPi.GPIO` |
+| Item Camera | CSI / USB Camera | `picamera2` / `OpenCV` |
 
 ---
 

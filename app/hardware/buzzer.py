@@ -1,25 +1,34 @@
 """
-Hardware abstraction: Passive buzzer.
+Hardware abstraction: Audio feedback buzzer.
 
-In simulation mode buzzer actions are only logged.
+Pin: BCM GPIO 22 (Physical pin 15).
+Provides non-blocking audio feedback patterns for system events:
+  - beep(duration, count, gap)
+  - success(): short double confirmation beep
+  - error(): longer alert tone
 """
 
+from __future__ import annotations
+
 import logging
+import threading
 import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_BUZZER_PIN = 22  # BCM GPIO 22 (Physical pin 15)
+
 
 class Buzzer:
-    """Passive buzzer controlled via PWM.
+    """Controls the piezo buzzer via GPIO PWM.
 
     Parameters
     ----------
     simulation : bool
-        When True, beeps are only logged.
-    pin : int | None
-        BCM GPIO pin number.  Required when *simulation* is False.
+        When True, sound sequences are logged rather than played on hardware.
+    pin : int
+        BCM GPIO pin number. Default is GPIO 22.
     frequency : int
         Tone frequency in Hz (default 1000 Hz).
     """
@@ -27,13 +36,15 @@ class Buzzer:
     def __init__(
         self,
         simulation: bool = True,
-        pin: Optional[int] = None,
+        pin: int = DEFAULT_BUZZER_PIN,
         frequency: int = 1000,
     ):
         self._simulation = simulation
         self._pin = pin
         self._frequency = frequency
         self._pwm = None
+        self._lock = threading.Lock()
+        self._closed: bool = False
 
         if not simulation:
             self._init_hardware()
@@ -42,55 +53,81 @@ class Buzzer:
     # Public API
     # ------------------------------------------------------------------
 
-    def beep(self, duration: float = 0.2, count: int = 1, gap: float = 0.1) -> None:
-        """Emit *count* beeps each lasting *duration* seconds.
+    def beep(
+        self,
+        duration: float = 0.2,
+        count: int = 1,
+        gap: float = 0.1,
+        blocking: bool = False,
+    ) -> None:
+        """Play *count* beeps of *duration* seconds separated by *gap* seconds.
 
-        Parameters
-        ----------
-        duration : float
-            Length of each beep in seconds.
-        count : int
-            Number of beeps.
-        gap : float
-            Silence between beeps in seconds.
+        Runs asynchronously in a background thread by default so it does not
+        block the application.
         """
+        if self._closed:
+            return
+
         if self._simulation:
             logger.debug(
-                "[SIM] Buzzer: %d beep(s) duration=%.2fs gap=%.2fs",
+                "[SIM] Buzzer: %d beep(s) duration=%.2fs gap=%.2fs freq=%dHz",
                 count,
                 duration,
                 gap,
+                self._frequency,
             )
             return
 
-        for i in range(count):
-            self._start_tone()
-            time.sleep(duration)
-            self._stop_tone()
-            if i < count - 1:
-                time.sleep(gap)
+        def _play():
+            with self._lock:
+                for i in range(count):
+                    if self._closed:
+                        break
+                    self._start_tone()
+                    time.sleep(duration)
+                    self._stop_tone()
+                    if i < count - 1:
+                        time.sleep(gap)
+
+        if blocking:
+            _play()
+        else:
+            threading.Thread(target=_play, daemon=True).start()
+
+    def success(self) -> None:
+        """Play a short double-beep confirmation pattern."""
+        self.beep(duration=0.08, count=2, gap=0.05)
 
     def success_tone(self) -> None:
-        """Play a short success sequence."""
-        self.beep(duration=0.1, count=2, gap=0.05)
+        """Backwards-compatible alias for success()."""
+        self.success()
+
+    def error(self) -> None:
+        """Play a long alert tone for errors or access denial."""
+        self.beep(duration=0.45, count=1)
 
     def error_tone(self) -> None:
-        """Play a long error tone."""
-        self.beep(duration=0.5, count=1)
+        """Backwards-compatible alias for error()."""
+        self.error()
 
     def close(self) -> None:
-        """Release hardware resources."""
-        if not self._simulation and self._pwm is not None:
-            try:
-                self._pwm.stop()
-                import RPi.GPIO as GPIO  # type: ignore[import]
+        """Release PWM and GPIO resources."""
+        with self._lock:
+            self._closed = True
+            if not self._simulation and self._pwm is not None:
+                try:
+                    self._pwm.stop()
+                    import RPi.GPIO as GPIO  # type: ignore[import]
 
-                GPIO.cleanup(self._pin)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Error closing buzzer: %s", exc)
+                    GPIO.cleanup(self._pin)
+                    logger.info("Buzzer pin %d cleaned up", self._pin)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Error closing buzzer pin %d: %s", self._pin, exc)
+                finally:
+                    self._pwm = None
 
     # ------------------------------------------------------------------
-    # Internal
+    # Internal Hardware Methods
     # ------------------------------------------------------------------
 
     def _init_hardware(self) -> None:
@@ -102,18 +139,29 @@ class Buzzer:
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(self._pin, GPIO.OUT)
             self._pwm = GPIO.PWM(self._pin, self._frequency)
-            logger.info("Buzzer initialised on pin %d", self._pin)
-        except ImportError:
+            logger.info("Buzzer initialised on GPIO pin %d (%d Hz)", self._pin, self._frequency)
+        except ImportError as exc:
             raise RuntimeError(
-                "RPi.GPIO not available. "
-                "Run on a Raspberry Pi or set simulation=True."
-            )
+                "RPi.GPIO not available. Run on a Raspberry Pi or set simulation=True."
+            ) from exc
 
     def _start_tone(self) -> None:
         if self._pwm is not None:
-            self._pwm.start(50)  # 50% duty cycle
+            try:
+                self._pwm.start(50)  # 50% duty cycle
+            except Exception:
+                pass
 
     def _stop_tone(self) -> None:
         if self._pwm is not None:
-            self._pwm.stop()
+            try:
+                self._pwm.stop()
+            except Exception:
+                pass
 
+
+class MockBuzzer(Buzzer):
+    """Convenience simulation buzzer for tests and development."""
+
+    def __init__(self, pin: int = DEFAULT_BUZZER_PIN, frequency: int = 1000):
+        super().__init__(simulation=True, pin=pin, frequency=frequency)

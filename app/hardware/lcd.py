@@ -1,9 +1,12 @@
 """
-Hardware abstraction: LCD display (I2C character LCD).
+Hardware abstraction: LCD display (16x2 I2C character LCD).
 
-In simulation mode messages are written to the logger instead of a
-physical display.
+In simulation mode messages are written to the logger and stored in memory.
+Physical mode communicates over I2C bus 1 (SDA: GPIO 2, SCL: GPIO 3).
+Handles initialization errors gracefully without crashing the application.
 """
+
+from __future__ import annotations
 
 import logging
 from typing import Optional
@@ -15,20 +18,20 @@ _LCD_ROWS = 2
 
 
 class LCD:
-    """16x2 character LCD accessed via I2C.
+    """16x2 character LCD accessed via I2C (PCF8574 backpack).
 
     Parameters
     ----------
     simulation : bool
-        When True, messages are only logged, not sent to hardware.
+        When True, messages are logged and stored in memory rather than sent to hardware.
     i2c_address : int
         I2C address of the PCF8574 backpack (commonly 0x27 or 0x3F).
     i2c_bus : int
         I2C bus number (1 on Raspberry Pi).
     cols : int
-        Number of display columns.
+        Number of display columns (default 16).
     rows : int
-        Number of display rows.
+        Number of display rows (default 2).
     """
 
     def __init__(
@@ -46,6 +49,7 @@ class LCD:
         self._rows = rows
         self._display = None
         self._last_lines: list[str] = ["", ""]
+        self._closed: bool = False
 
         if not simulation:
             self._init_hardware()
@@ -55,7 +59,7 @@ class LCD:
     # ------------------------------------------------------------------
 
     def show(self, line1: str = "", line2: str = "") -> None:
-        """Display up to two lines of text, truncated to fit.
+        """Display up to two lines of text, safely truncated to fit columns.
 
         Parameters
         ----------
@@ -64,35 +68,39 @@ class LCD:
         line2 : str
             Text for the second row.
         """
-        l1 = str(line1)[: self._cols]
-        l2 = str(line2)[: self._cols]
+        l1 = str(line1 if line1 is not None else "")[: self._cols]
+        l2 = str(line2 if line2 is not None else "")[: self._cols]
         self._last_lines = [l1, l2]
 
-        if self._simulation:
+        if self._simulation or self._display is None:
             logger.debug("[LCD] %-*s | %-*s", self._cols, l1, self._cols, l2)
             return
 
         self._write_hardware(l1, l2)
 
     def clear(self) -> None:
-        """Clear the display."""
+        """Clear the LCD screen."""
         self.show("", "")
 
     @property
     def last_lines(self) -> list[str]:
-        """The most recently shown lines (useful for tests)."""
+        """The most recently displayed lines (useful for assertions and dashboard sync)."""
         return list(self._last_lines)
 
     def close(self) -> None:
-        """Release hardware resources."""
-        if not self._simulation and self._display is not None:
+        """Clear display and release hardware resources."""
+        self._closed = True
+        if self._display is not None:
             try:
+                self._display.clear()
                 self._display.close()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Error closing LCD: %s", exc)
+            finally:
+                self._display = None
 
     # ------------------------------------------------------------------
-    # Internal
+    # Internal Hardware Methods
     # ------------------------------------------------------------------
 
     def _init_hardware(self) -> None:
@@ -107,12 +115,22 @@ class LCD:
                 rows=self._rows,
                 dotsize=8,
             )
-            logger.info("LCD initialised at I2C address 0x%02X", self._address)
+            self._display.clear()
+            logger.info("LCD initialised at I2C address 0x%02X on bus %d", self._address, self._bus)
         except ImportError:
-            raise RuntimeError(
-                "RPLCD library not available. "
-                "Install RPLCD or set simulation=True."
+            logger.warning(
+                "RPLCD library not available. Falling back to simulation mode for LCD."
             )
+            self._simulation = True
+            self._display = None
+        except Exception as exc:
+            logger.error(
+                "Failed to initialise physical LCD at 0x%02X: %s. Operating in degraded simulation mode.",
+                self._address,
+                exc,
+            )
+            self._simulation = True
+            self._display = None
 
     def _write_hardware(self, line1: str, line2: str) -> None:
         try:
@@ -125,3 +143,9 @@ class LCD:
         except Exception as exc:
             logger.error("Failed to write to LCD: %s", exc)
 
+
+class MockLCD(LCD):
+    """Convenience simulation LCD for tests and development."""
+
+    def __init__(self, cols: int = _LCD_COLS, rows: int = _LCD_ROWS):
+        super().__init__(simulation=True, cols=cols, rows=rows)
