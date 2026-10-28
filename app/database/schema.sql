@@ -75,6 +75,32 @@ CREATE TABLE IF NOT EXISTS system_events (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ML Usage Demand Predictions
+CREATE TABLE IF NOT EXISTS predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target TEXT NOT NULL,
+    horizon_hours INTEGER NOT NULL DEFAULT 1,
+    predicted_value REAL NOT NULL,
+    confidence REAL,
+    model TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ML Vision Classification Results
+CREATE TABLE IF NOT EXISTS vision_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER,
+    item_id INTEGER,
+    expected_item TEXT NOT NULL,
+    predicted_class TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    match INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    FOREIGN KEY (item_id) REFERENCES items(id)
+);
+
 -- ============================================
 -- Initial SmartHub services
 -- ============================================

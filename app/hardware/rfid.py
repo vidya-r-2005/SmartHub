@@ -100,6 +100,13 @@ class RFIDReader:
         with self._lock:
             self._mock_uid = normalize_uid(uid) if uid is not None else None
 
+    def set_tag(self, uid: Optional[str]) -> None:
+        """Convenience alias to simulate scanning an RFID tag."""
+        if uid is not None:
+            self.queue_uid(uid)
+        else:
+            self.set_mock_uid(None)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------

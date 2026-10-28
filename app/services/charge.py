@@ -38,8 +38,8 @@ class ChargeServiceError(Exception):
 
 
 def start_charging_session(
-    rfid_uid: str,
-    amount: float,
+    rfid_uid: Optional[str] = None,
+    amount: float = 5.0,
     payment_method: str = "coin",
     charging_controller: Optional[ChargingController] = None,
     coin_acceptor: Optional[CoinAcceptor] = None,
@@ -50,8 +50,9 @@ def start_charging_session(
 
     Parameters
     ----------
-    rfid_uid : str
-        RFID UID of the user.  The user is auto-registered if not found.
+    rfid_uid : str | None
+        RFID UID of the user. If None, defaults to 'KIOSK_USER'.
+        The user is auto-registered if not found.
     amount : float
         Payment amount to record.
     payment_method : str
@@ -68,8 +69,13 @@ def start_charging_session(
     dict with keys: session_id, transaction_id, user_id, status
     """
     # --- Validate inputs --------------------------------------------------------
-    if not rfid_uid or not rfid_uid.strip():
-        raise ChargeServiceError("RFID UID is required")
+    if rfid_uid is None:
+        uid = "KIOSK_USER"
+    else:
+        if not rfid_uid or not rfid_uid.strip():
+            raise ChargeServiceError("RFID UID is required")
+        uid = rfid_uid.strip()
+
     if not isinstance(port_capacity, int) or isinstance(port_capacity, bool) or port_capacity < 1:
         raise ChargeServiceError("port_capacity must be a positive integer")
 
@@ -88,8 +94,6 @@ def start_charging_session(
             f"Invalid payment method {payment_method!r}. "
             f"Accepted: {sorted(_VALID_PAYMENT_METHODS)}"
         )
-
-    uid = rfid_uid.strip()
 
     # --- Ensure user exists -----------------------------------------------------
     user = db.get_user_by_rfid(uid, db_path)
@@ -224,6 +228,11 @@ def stop_charging_session(
 
     # Disable hardware — if it fails, downgrade status to 'failed'
     ctrl = charging_controller or ChargingController(simulation=True)
+    if hasattr(ctrl, "stop") and callable(ctrl.stop):
+        try:
+            ctrl.stop()
+        except Exception:
+            pass
     hw_ok = ctrl.disable()
     if not hw_ok:
         logger.error("Failed to disable charging port for session %d", session_id)

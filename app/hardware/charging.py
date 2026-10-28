@@ -56,7 +56,11 @@ class ChargingController:
         clock: Optional[Callable[[], float]] = None,
         pin: Optional[int] = 27,
         active_high: bool = True,
+        relay: Optional[Relay] = None,
     ):
+        if relay is not None:
+            relay_or_simulation = relay
+
         if not isinstance(seconds_per_credit, (int, float)) or isinstance(seconds_per_credit, bool) or seconds_per_credit <= 0:
             raise ValueError("seconds_per_credit must be a positive number")
 

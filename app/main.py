@@ -76,6 +76,12 @@ def create_app(config: type[Config] | None = None) -> Flask:
                     recovered,
                     timeout_hours,
                 )
+
+            # Recover active hardware sessions
+            from app.kiosk import get_kiosk_coordinator
+            sim = getattr(cfg, "SIMULATION", True) or getattr(cfg, "TESTING", False)
+            kiosk = get_kiosk_coordinator(simulation=sim, db_path=cfg.DATABASE_PATH)
+            kiosk.recover_active_sessions()
         except Exception:
             logger.exception("Database initialisation failed — continuing anyway")
 
@@ -503,6 +509,35 @@ def _register_routes(app: Flask) -> None:
         result = verify_item(image_data, expected_category, mime_type)
         status_code = 200 if result.get("available") else 503
         return jsonify(result), status_code
+
+    # --- Kiosk State & Hardware Status -----------------------------------------
+
+    @app.get("/api/kiosk/status")
+    def kiosk_status():
+        from app.kiosk import get_kiosk_coordinator
+        sim = getattr(app.config, "SIMULATION", True) or app.config.get("TESTING", False)
+        kiosk = get_kiosk_coordinator(simulation=sim, db_path=_db_path(app))
+        return jsonify({
+            "state": kiosk.state.value,
+            "simulation": kiosk.simulation,
+            "charging": kiosk.charging_ctrl.is_charging,
+            "seconds_remaining": kiosk.charging_ctrl.seconds_remaining(),
+            "current_user": kiosk.current_user_uid,
+            "current_session": kiosk.current_session_id,
+            "coins_inserted": kiosk.coins_inserted,
+        }), 200
+
+    @app.post("/api/kiosk/self-test")
+    def kiosk_self_test():
+        from app.kiosk import get_kiosk_coordinator
+        sim = getattr(app.config, "SIMULATION", True) or app.config.get("TESTING", False)
+        kiosk = get_kiosk_coordinator(simulation=sim, db_path=_db_path(app))
+        results = kiosk.self_test()
+        all_passed = all(results.values())
+        return jsonify({
+            "passed": all_passed,
+            "results": results,
+        }), 200 if all_passed else 500
 
     # --- Dashboard HTML --------------------------------------------------------
 

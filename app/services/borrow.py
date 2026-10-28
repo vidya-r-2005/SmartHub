@@ -48,6 +48,7 @@ def start_borrow(
     item_rfid: str,
     image_data: Optional[bytes] = None,
     mime_type: str = "image/jpeg",
+    allow_auto_register: bool = True,
     db_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Begin a borrow session for *item_rfid* by the user with *rfid_uid*.
@@ -65,6 +66,8 @@ def start_borrow(
         RFID identity alone.
     mime_type : str
         MIME type of *image_data*.
+    allow_auto_register : bool
+        Whether to automatically register an unknown user RFID.
     db_path : Path | None
         Override database path.
 
@@ -85,12 +88,21 @@ def start_borrow(
     # --- Resolve or register user -----------------------------------------------
     user = db.get_user_by_rfid(uid, db_path)
     if user is None:
+        if not allow_auto_register:
+            raise BorrowServiceError(f"User RFID {uid!r} is not registered")
         user_id = db.create_user(uid, db_path)
         if user_id is None:
             user = db.get_user_by_rfid(uid, db_path)
             user_id = user["id"]
     else:
         user_id = user["id"]
+
+    # --- Check daily borrow limit (Max 2 per day) ------------------------------
+    daily_count = db.get_daily_borrow_count(user_id, db_path=db_path)
+    if daily_count >= 2:
+        raise BorrowServiceError(
+            f"Daily borrow limit reached for user {uid!r} (already borrowed {daily_count} items today, maximum is 2)"
+        )
 
     # --- Locate item by RFID ----------------------------------------------------
     item = db.get_item_by_rfid(iuid, db_path)
@@ -109,6 +121,22 @@ def start_borrow(
             raise BorrowServiceError(
                 "Vision verification is unavailable; refusing camera-verified borrow"
             )
+
+        match_val = bool(vision_result.get("match"))
+        pred_cat = str(vision_result.get("category") or "unknown")
+        conf = float(vision_result.get("confidence") or 0.0)
+        try:
+            db.record_vision_result(
+                expected_item=item["item_type"],
+                predicted_class=pred_cat,
+                confidence=conf,
+                match=match_val,
+                item_id=item["id"],
+                db_path=db_path,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not record vision result: %s", exc)
+
         if vision_result.get("available") and vision_result.get("match") is False:
             # Mismatch confirmed — log and refuse
             db.log_system_event(
@@ -154,6 +182,7 @@ def start_borrow(
 
 def return_item(
     item_rfid: str,
+    user_rfid: Optional[str] = None,
     image_data: Optional[bytes] = None,
     mime_type: str = "image/jpeg",
     db_path: Optional[Path] = None,
@@ -164,6 +193,8 @@ def return_item(
     ----------
     item_rfid : str
         RFID UID of the item being returned.
+    user_rfid : str | None
+        Optional RFID UID of the returning user.
     image_data : bytes | None
         Optional image for vision verification.
     mime_type : str
@@ -179,6 +210,12 @@ def return_item(
         raise BorrowServiceError("Item RFID UID is required")
 
     iuid = item_rfid.strip()
+
+    if user_rfid and user_rfid.strip():
+        u_uid = user_rfid.strip()
+        user = db.get_user_by_rfid(u_uid, db_path)
+        if user is None:
+            raise BorrowServiceError(f"User RFID {u_uid!r} is not registered")
 
     # --- Locate item ------------------------------------------------------------
     item = db.get_item_by_rfid(iuid, db_path)
@@ -197,6 +234,22 @@ def return_item(
             raise BorrowServiceError(
                 "Vision verification is unavailable; refusing camera-verified return"
             )
+
+        match_val = bool(vision_result.get("match"))
+        pred_cat = str(vision_result.get("category") or "unknown")
+        conf = float(vision_result.get("confidence") or 0.0)
+        try:
+            db.record_vision_result(
+                expected_item=item["item_type"],
+                predicted_class=pred_cat,
+                confidence=conf,
+                match=match_val,
+                item_id=item["id"],
+                db_path=db_path,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not record vision result: %s", exc)
+
         if vision_result.get("available") and vision_result.get("match") is False:
             db.log_system_event(
                 "RETURN_VISION_MISMATCH",

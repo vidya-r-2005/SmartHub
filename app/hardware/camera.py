@@ -63,6 +63,10 @@ class Camera:
 
         return self._capture_hardware()
 
+    def capture_image(self) -> bytes:
+        """Alias for capture() returning JPEG bytes."""
+        return self.capture()
+
     def capture_to_file(self, destination: Union[str, Path]) -> Path:
         """Capture an image and save it directly to the specified destination path."""
         data = self.capture()

@@ -5,7 +5,28 @@ Lock hardware is replaced by simulation or injected mock controllers.
 All tests use isolated temporary databases.
 """
 
-import pytest
+try:
+    import pytest
+except ImportError:
+    class _MockPytest:
+        class raises:
+            def __init__(self, expected_exc, match=None):
+                self.expected_exc = expected_exc
+                self.match = match
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    raise AssertionError(f"Expected {self.expected_exc.__name__} was not raised")
+                if not issubclass(exc_type, self.expected_exc):
+                    return False
+                if self.match and self.match not in str(exc_val):
+                    raise AssertionError(f"Exception message '{exc_val}' does not match '{self.match}'")
+                return True
+
+    pytest = _MockPytest()  # type: ignore
 
 from app.services.store import (
     StoreServiceError,
@@ -189,4 +210,14 @@ def test_get_store_sessions_returns_list(tmp_db):
     start_storage_session(rfid_uid="SL_2", db_path=tmp_db)
     sessions = get_store_sessions(db_path=tmp_db)
     assert len(sessions) >= 2
+
+
+def test_start_storage_rejects_unregistered_when_disallowed(tmp_db):
+    with pytest.raises(StoreServiceError, match="not registered"):
+        start_storage_session(
+            rfid_uid="UNKNOWN_STORAGE_USER",
+            allow_auto_register=False,
+            db_path=tmp_db,
+        )
+
 

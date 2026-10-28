@@ -13,6 +13,7 @@ rather than fail immediately.  ``get_connection()`` sets a 10-second busy
 timeout so that brief lock contention does not cause spurious errors.
 """
 
+from datetime import datetime, timezone
 import logging
 import sqlite3
 from pathlib import Path
@@ -826,3 +827,87 @@ def get_usage_metrics(
         LIMIT ?
     """
     return execute_query(query, (limit,), db_path)
+
+
+# ---------------------------------------------------------------------------
+# Project Specification Helpers (Borrow limits, Recovery & ML Results)
+# ---------------------------------------------------------------------------
+
+
+def get_daily_borrow_count(
+    user_id: int,
+    date_str: Optional[str] = None,
+    db_path: Optional[Path] = None,
+) -> int:
+    """Return the number of successful borrow records for a user on a given UTC date (YYYY-MM-DD)."""
+    if date_str is None:
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    query = """
+        SELECT COUNT(*) AS borrow_count
+        FROM borrow_records AS b
+        JOIN sessions AS s ON b.session_id = s.id
+        WHERE s.user_id = ?
+          AND date(b.borrowed_at) = date(?)
+          AND s.status != 'failed'
+    """
+    rows = execute_query(query, (user_id, date_str), db_path)
+    return int(rows[0]["borrow_count"]) if rows else 0
+
+
+def get_active_charging_session(db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
+    """Return the currently active CHARGE session with payment amount for recovery."""
+    query = """
+        SELECT s.id, s.user_id, s.started_at, s.status, t.amount
+        FROM sessions AS s
+        JOIN services AS sv ON s.service_id = sv.id
+        LEFT JOIN transactions AS t ON t.session_id = s.id
+        WHERE sv.name = 'CHARGE' AND s.status = 'active'
+        ORDER BY s.id DESC
+        LIMIT 1
+    """
+    rows = execute_query(query, (), db_path)
+    return rows[0] if rows else None
+
+
+def record_vision_result(
+    expected_item: str,
+    predicted_class: str,
+    confidence: float,
+    match: bool,
+    session_id: Optional[int] = None,
+    item_id: Optional[int] = None,
+    db_path: Optional[Path] = None,
+) -> int:
+    """Record an ML vision classification outcome."""
+    query = """
+        INSERT INTO vision_results (
+            session_id, item_id, expected_item, predicted_class, confidence, match
+        ) VALUES (?, ?, ?, ?, ?, ?)
+    """
+    return execute_insert(
+        query,
+        (session_id, item_id, expected_item, predicted_class, float(confidence), 1 if match else 0),
+        db_path,
+    )
+
+
+def record_prediction(
+    target: str,
+    predicted_value: float,
+    confidence: Optional[float] = None,
+    model: Optional[str] = None,
+    horizon_hours: int = 1,
+    db_path: Optional[Path] = None,
+) -> int:
+    """Record an ML usage demand forecast."""
+    query = """
+        INSERT INTO predictions (
+            target, horizon_hours, predicted_value, confidence, model
+        ) VALUES (?, ?, ?, ?, ?)
+    """
+    return execute_insert(
+        query,
+        (target, horizon_hours, float(predicted_value), confidence, model),
+        db_path,
+    )
+

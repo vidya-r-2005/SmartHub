@@ -24,10 +24,13 @@ DEFAULT_LED_PINS = {
 STATUS_MAP: Dict[str, set[str]] = {
     "READY": {"GREEN"},
     "SUCCESS": {"GREEN"},
+    "GREEN": {"GREEN"},
     "CHARGING": {"BLUE"},
     "BUSY": {"BLUE"},
+    "BLUE": {"BLUE"},
     "ERROR": {"RED"},
     "DENIED": {"RED"},
+    "RED": {"RED"},
     "ALL_OFF": set(),
 }
 
@@ -65,6 +68,11 @@ class LEDs:
     def current_status(self) -> str:
         """The currently applied status name."""
         return self._current_status
+
+    @property
+    def status(self) -> str:
+        """Normalized lowercase status string."""
+        return self._current_status.lower()
 
     def is_on(self, color: str) -> bool:
         """Return True if the specified color LED ('GREEN', 'RED', 'BLUE') is lit."""

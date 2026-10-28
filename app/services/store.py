@@ -28,12 +28,16 @@ from app.hardware.lock import LockController
 logger = logging.getLogger(__name__)
 
 
+AUTO_LOCK_SECONDS = 25
+
+
 class StoreServiceError(Exception):
     """Raised when a storage operation cannot be completed."""
 
 
 def start_storage_session(
     rfid_uid: str,
+    allow_auto_register: bool = True,
     db_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Start a storage session for the user identified by *rfid_uid*.
@@ -56,6 +60,8 @@ def start_storage_session(
     # Resolve or register user
     user = db.get_user_by_rfid(uid, db_path)
     if user is None:
+        if not allow_auto_register:
+            raise StoreServiceError(f"User RFID {uid!r} is not registered")
         user_id = db.create_user(uid, db_path)
         if user_id is None:
             user = db.get_user_by_rfid(uid, db_path)

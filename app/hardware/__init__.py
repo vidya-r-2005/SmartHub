@@ -18,7 +18,7 @@ from app.hardware.buttons import BUTTON_PINS, Button, GPIOButtons, MockButtons
 from app.hardware.buzzer import DEFAULT_BUZZER_PIN, Buzzer, MockBuzzer
 from app.hardware.camera import Camera, MockCamera
 from app.hardware.charging import SECONDS_PER_COIN, ChargingController, ChargingState
-from app.hardware.coin import DEFAULT_COIN_PIN, DEFAULT_COIN_VALUE, CoinAcceptor
+from app.hardware.coin import DEFAULT_COIN_PIN, DEFAULT_COIN_VALUE, CoinAcceptor, MockCoinAcceptor
 from app.hardware.lcd import LCD, MockLCD
 from app.hardware.leds import DEFAULT_LED_PINS, LEDs, MockLEDs
 from app.hardware.lock import DEFAULT_SERVO_PIN, LockController, MockLock
@@ -41,6 +41,7 @@ __all__ = [
     "DEFAULT_COIN_PIN",
     "DEFAULT_COIN_VALUE",
     "CoinAcceptor",
+    "MockCoinAcceptor",
     "LCD",
     "MockLCD",
     "DEFAULT_LED_PINS",

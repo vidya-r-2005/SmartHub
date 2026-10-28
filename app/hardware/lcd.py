@@ -78,6 +78,11 @@ class LCD:
 
         self._write_hardware(l1, l2)
 
+    def display(self, line1: str = "", line2: str = "") -> bool:
+        """Alias for show() returning True on successful write."""
+        self.show(line1, line2)
+        return True
+
     def clear(self) -> None:
         """Clear the LCD screen."""
         self.show("", "")

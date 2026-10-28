@@ -159,6 +159,10 @@ class CoinAcceptor:
         """Convenience alias for simulation mode."""
         self.add_coin(coins)
 
+    def insert_coins(self, count: int = 1) -> float:
+        """Alias for add_coin() for simulation testing."""
+        return self.add_coin(count)
+
     def collect(self, required_amount: float) -> bool:
         """Collect required_amount from balance.
 
@@ -265,3 +269,12 @@ class CoinAcceptor:
             self.balance,
         )
         return False
+
+
+class MockCoinAcceptor(CoinAcceptor):
+    """Convenience subclass for simulated coin acceptor."""
+
+    def __init__(self, **kwargs):
+        kwargs["simulation"] = True
+        super().__init__(**kwargs)
+

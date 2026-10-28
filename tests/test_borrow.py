@@ -5,7 +5,29 @@ Vision module is mocked at the module level to avoid real model loading.
 All tests use isolated temporary databases.
 """
 
-import pytest
+try:
+    import pytest
+except ImportError:
+    class _MockPytest:
+        class raises:
+            def __init__(self, expected_exc, match=None):
+                self.expected_exc = expected_exc
+                self.match = match
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    raise AssertionError(f"Expected {self.expected_exc.__name__} was not raised")
+                if not issubclass(exc_type, self.expected_exc):
+                    return False
+                if self.match and self.match not in str(exc_val):
+                    raise AssertionError(f"Exception message '{exc_val}' does not match '{self.match}'")
+                return True
+
+    pytest = _MockPytest()  # type: ignore
+
 from unittest.mock import patch
 
 from app.services.borrow import (
@@ -282,4 +304,71 @@ def test_get_borrow_records_returns_list(tmp_db):
 
     records = get_borrow_records(db_path=tmp_db)
     assert len(records) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Business Rule & Specification Tests
+# ---------------------------------------------------------------------------
+
+
+def test_start_borrow_daily_limit_enforced(tmp_db):
+    _make_user("LIMIT_USER", tmp_db)
+    _make_item("ITEM_L1", "cable", tmp_db)
+    _make_item("ITEM_L2", "charger", tmp_db)
+    _make_item("ITEM_L3", "power_bank", tmp_db)
+
+    # 1st borrow succeeds
+    res1 = start_borrow("LIMIT_USER", "ITEM_L1", db_path=tmp_db)
+    assert res1["borrow_record_id"] is not None
+
+    # 2nd borrow succeeds
+    res2 = start_borrow("LIMIT_USER", "ITEM_L2", db_path=tmp_db)
+    assert res2["borrow_record_id"] is not None
+
+    # 3rd borrow on same day MUST fail
+    with pytest.raises(BorrowServiceError, match="Daily borrow limit"):
+        start_borrow("LIMIT_USER", "ITEM_L3", db_path=tmp_db)
+
+
+def test_start_borrow_rejects_unregistered_when_disallowed(tmp_db):
+    _make_item("UNREG_ITEM", "cable", tmp_db)
+    with pytest.raises(BorrowServiceError, match="not registered"):
+        start_borrow(
+            rfid_uid="UNREGISTERED_CARD",
+            item_rfid="UNREG_ITEM",
+            allow_auto_register=False,
+            db_path=tmp_db,
+        )
+
+
+def test_return_item_with_unregistered_user_rfid_raises(tmp_db):
+    _make_user("VALID_BORROWER", tmp_db)
+    _make_item("RET_USER_ITEM", "power_bank", tmp_db)
+    start_borrow("VALID_BORROWER", "RET_USER_ITEM", db_path=tmp_db)
+
+    with pytest.raises(BorrowServiceError, match="not registered"):
+        return_item("RET_USER_ITEM", user_rfid="UNKNOWN_RETURNER", db_path=tmp_db)
+
+
+def test_vision_result_recorded_in_database(tmp_db):
+    _make_user("VR_USER", tmp_db)
+    _make_item("VR_ITEM", "power_bank", tmp_db)
+
+    fake_vision = _vision_match("power_bank")
+    with patch("app.services.borrow._verify_vision", return_value=fake_vision):
+        start_borrow(
+            rfid_uid="VR_USER",
+            item_rfid="VR_ITEM",
+            image_data=b"dummy_data",
+            db_path=tmp_db,
+        )
+
+    rows = database.execute_query(
+        "SELECT * FROM vision_results ORDER BY id DESC LIMIT 1", (), tmp_db
+    )
+    assert len(rows) == 1
+    assert rows[0]["expected_item"] == "power_bank"
+    assert rows[0]["predicted_class"] == "power_bank"
+    assert rows[0]["match"] == 1
+
 

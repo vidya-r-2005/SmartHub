@@ -6,7 +6,28 @@ All requests use a temporary isolated database.
 """
 
 import json
-import pytest
+try:
+    import pytest
+except ImportError:
+    class _MockPytest:
+        class raises:
+            def __init__(self, expected_exc, match=None):
+                self.expected_exc = expected_exc
+                self.match = match
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    raise AssertionError(f"Expected {self.expected_exc.__name__} was not raised")
+                if not issubclass(exc_type, self.expected_exc):
+                    return False
+                if self.match and self.match not in str(exc_val):
+                    raise AssertionError(f"Exception message '{exc_val}' does not match '{self.match}'")
+                return True
+
+    pytest = _MockPytest()  # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -299,4 +320,30 @@ def test_unknown_route_returns_404(client):
     resp = client.get("/api/nonexistent")
     assert resp.status_code == 404
     assert "error" in resp.get_json()
+
+
+# ---------------------------------------------------------------------------
+# Kiosk Coordinator Endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_kiosk_status_endpoint(client):
+    resp = client.get("/api/kiosk/status")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "state" in data
+    assert "simulation" in data
+    assert "charging" in data
+    assert "seconds_remaining" in data
+
+
+def test_kiosk_self_test_endpoint(client):
+    resp = client.post("/api/kiosk/self-test")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["passed"] is True
+    assert "results" in data
+    assert data["results"]["database"] is True
+    assert data["results"]["relay"] is True
+
 
